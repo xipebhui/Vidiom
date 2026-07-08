@@ -7,6 +7,7 @@ Vidiom 是一个从“一句话”生成短剧的 agent 画布产品。用户输
 - 导入故事/灵感文本到待处理队列
 - Studio Web 产品：一句话输入、项目列表、agent 画布、节点检查器、脚本预览
 - 草稿项目可在 Seed Inspector 中编辑标题和一句话，并持久化到画布与生成队列
+- Timeline 面板展示项目创建、每个 agent 节点状态、更新时间、输出摘要和错误
 - Agent 画布工作流：Premise Agent、Character Agent、Beat Agent、Script Agent、Production Agent
 - 使用 OpenAI Responses API 生成 JSON 结构化短剧
 - 保存生成状态、错误信息、成品脚本和运行日志
@@ -26,7 +27,7 @@ vidiom serve
 
 打开 `http://127.0.0.1:8000`。
 
-在 Studio 中创建画布后，选中 Seed 节点可编辑草稿标题和一句话；运行 Agent 后项目进入生成流程，已生成内容保持可检查、可预览。
+在 Studio 中创建画布后，选中 Seed 节点可编辑草稿标题和一句话；运行 Agent 后项目进入生成流程，Timeline 会展示节点状态、更新时间、输出摘要和错误，已生成内容保持可检查、可预览。
 
 必须配置：
 

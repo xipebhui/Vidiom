@@ -30,6 +30,7 @@ class UpdateProjectRequest(BaseModel):
 
 class RunProjectResponse(BaseModel):
     project: dict
+    activity: list[dict]
 
 
 def get_settings() -> Settings:
@@ -74,13 +75,13 @@ def create_project(
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> dict:
     project_id = create_canvas_project(storage, request.seed_text)
-    return {"project": storage.get_project(project_id)}
+    return _project_response(storage, project_id)
 
 
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: int, storage: Annotated[Storage, Depends(get_storage)]) -> dict:
     try:
-        return {"project": storage.get_project(project_id)}
+        return _project_response(storage, project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -99,7 +100,7 @@ def update_project(
             seed_text=request.seed_text,
             title=request.title,
         )
-        return {"project": storage.get_project(project_id)}
+        return _project_response(storage, project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
@@ -122,4 +123,11 @@ def run_project(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"project": project}
+    return {"project": project, "activity": storage.get_project_activity(project_id)}
+
+
+def _project_response(storage: Storage, project_id: int) -> dict:
+    return {
+        "project": storage.get_project(project_id),
+        "activity": storage.get_project_activity(project_id),
+    }

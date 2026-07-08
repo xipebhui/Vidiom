@@ -1,6 +1,7 @@
 const state = {
   projects: [],
   project: null,
+  activity: [],
   selectedKey: "seed",
   running: false,
 };
@@ -18,6 +19,7 @@ const el = {
   projectStatus: document.querySelector("#projectStatus"),
   inspectorBody: document.querySelector("#inspectorBody"),
   scriptPreview: document.querySelector("#scriptPreview"),
+  activityTimeline: document.querySelector("#activityTimeline"),
 };
 
 el.createProject.addEventListener("click", createProject);
@@ -55,6 +57,7 @@ async function loadProject(projectId) {
   try {
     const body = await api(`/api/projects/${projectId}`);
     state.project = body.project;
+    state.activity = body.activity || [];
     state.selectedKey = state.project.nodes.find((node) => node.key === state.selectedKey)
       ? state.selectedKey
       : "seed";
@@ -78,6 +81,7 @@ async function createProject() {
       body: JSON.stringify({ seed_text: seedText }),
     });
     state.project = body.project;
+    state.activity = body.activity || [];
     state.selectedKey = "seed";
     el.seedText.value = "";
     await loadProjects();
@@ -98,6 +102,7 @@ async function runProject() {
   try {
     const body = await api(`/api/projects/${state.project.id}/run`, { method: "POST" });
     state.project = body.project;
+    state.activity = body.activity || [];
     state.selectedKey = "script";
     await loadProjects();
     render();
@@ -128,6 +133,7 @@ async function saveDraftEdits(event) {
       body: JSON.stringify({ title, seed_text: seedText }),
     });
     state.project = body.project;
+    state.activity = body.activity || [];
     state.selectedKey = "seed";
     await loadProjects();
     render();
@@ -144,6 +150,7 @@ function render() {
   renderCanvas();
   renderInspector();
   renderScript();
+  renderActivity();
 }
 
 function renderHeader() {
@@ -307,6 +314,34 @@ function renderScript() {
   `;
 }
 
+function renderActivity() {
+  if (!state.project) {
+    el.activityTimeline.innerHTML = `<div class="empty">No activity</div>`;
+    return;
+  }
+  if (!state.activity.length) {
+    el.activityTimeline.innerHTML = `<div class="empty">No activity</div>`;
+    return;
+  }
+
+  el.activityTimeline.innerHTML = state.activity.map(renderActivityItem).join("");
+}
+
+function renderActivityItem(item) {
+  return `
+    <div class="activity-item">
+      <span class="activity-dot status-${escapeHtml(item.status)}"></span>
+      <div class="activity-content">
+        <div class="activity-head">
+          <strong>${escapeHtml(item.title)}</strong>
+          <span>${escapeHtml(formatTime(item.occurred_at))}</span>
+        </div>
+        <div class="activity-description">${escapeHtml(item.description)}</div>
+      </div>
+    </div>
+  `;
+}
+
 function selectedNode() {
   return state.project?.nodes.find((node) => node.key === state.selectedKey);
 }
@@ -341,4 +376,15 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function formatTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

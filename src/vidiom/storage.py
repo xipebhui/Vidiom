@@ -389,6 +389,29 @@ class Storage:
         ]
         return project
 
+    def get_project_activity(self, project_id: int) -> list[dict[str, Any]]:
+        project = self.get_project(project_id)
+        activity = [
+            {
+                "type": "project",
+                "title": "Project created",
+                "status": "completed",
+                "description": project["seed_text"],
+                "occurred_at": project["created_at"],
+            }
+        ]
+        for node in project["nodes"]:
+            activity.append(
+                {
+                    "type": "node",
+                    "title": node["title"],
+                    "status": node["status"],
+                    "description": _activity_description(node),
+                    "occurred_at": node["updated_at"],
+                }
+            )
+        return activity
+
     def get_canvas_node(self, project_id: int, node_key: str) -> dict[str, Any]:
         with self.connect() as conn:
             row = conn.execute(
@@ -545,3 +568,31 @@ def _node_row(row: sqlite3.Row) -> dict[str, Any]:
         "error": row["error"],
         "updated_at": row["updated_at"],
     }
+
+
+def _activity_description(node: dict[str, Any]) -> str:
+    if node["error"]:
+        return str(node["error"])
+    output = node["output"]
+    if output is not None:
+        return _output_summary(output)
+    if node["status"] == "running":
+        return "Agent is generating this step."
+    return "Waiting for upstream output."
+
+
+def _output_summary(output: dict[str, Any]) -> str:
+    if "text" in output:
+        return str(output["text"])
+    if "one_sentence_pitch" in output:
+        return str(output["one_sentence_pitch"])
+    protagonist = output.get("protagonist")
+    if isinstance(protagonist, dict) and protagonist.get("name") and protagonist.get("desire"):
+        return f"{protagonist['name']} · {protagonist['desire']}"
+    if "logline" in output:
+        return str(output["logline"])
+    if "title" in output:
+        return str(output["title"])
+    if "visual_style" in output:
+        return str(output["visual_style"])
+    return "Completed."

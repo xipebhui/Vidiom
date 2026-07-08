@@ -443,6 +443,65 @@ pre {
   line-height: 1.5;
 }
 
+.activity-timeline {
+  display: grid;
+  gap: 12px;
+  min-height: 160px;
+}
+
+.activity-item {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 10px;
+  min-width: 0;
+}
+
+.activity-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.activity-content {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.activity-item:last-child .activity-content {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.activity-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.activity-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.activity-head span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.activity-description {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .empty {
   color: var(--muted);
   font-size: 13px;

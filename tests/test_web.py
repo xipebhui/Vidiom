@@ -83,3 +83,44 @@ def test_update_draft_project_api_updates_seed_node(tmp_path) -> None:
     assert project["title"] == "未来素材案"
     assert project["seed_text"] == "一个剪辑师在客户素材里看见明天的事故现场。"
     assert project["nodes"][0]["output"]["text"] == project["seed_text"]
+
+
+def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        create_response = client.post(
+            "/api/projects",
+            json={"seed_text": "一个剪辑师发现素材里藏着未来事故。"},
+        )
+        project_id = create_response.json()["project"]["id"]
+
+        response = client.get(f"/api/projects/{project_id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    activity = response.json()["activity"]
+    assert activity[0]["title"] == "Project created"
+    assert activity[0]["status"] == "completed"
+    assert activity[1]["title"] == "Seed"
+    assert activity[1]["description"] == "一个剪辑师发现素材里藏着未来事故。"
+    assert activity[-1]["title"] == "Production Agent"
+    assert activity[-1]["status"] == "pending"
