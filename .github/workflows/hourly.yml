@@ -1,0 +1,24 @@
+name: hourly-generation
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: vidiom init-db
+        env:
+          VIDIOM_DATABASE_PATH: ./data/vidiom.sqlite3
+      - run: vidiom run-once --limit 3
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          VIDIOM_OPENAI_MODEL: gpt-5.5
+          VIDIOM_DATABASE_PATH: ./data/vidiom.sqlite3

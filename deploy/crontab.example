@@ -1,0 +1,7 @@
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+VIDIOM_DATABASE_PATH=/data/vidiom.sqlite3
+VIDIOM_OPENAI_MODEL=gpt-5.5
+OPENAI_API_KEY=replace-with-production-key
+
+0 * * * * cd /opt/vidiom && . .venv/bin/activate && vidiom run-once --limit 3 >> /var/log/vidiom.log 2>&1

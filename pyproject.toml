@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vidiom"
+version = "0.1.0"
+description = "Hourly short-drama generation pipeline from stories and inspirations."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Vidiom" }]
+dependencies = [
+  "apscheduler>=3.11.0",
+  "openai>=1.99.0",
+  "python-dotenv>=1.0.1",
+  "rich>=13.9.4",
+  "typer>=0.15.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.4",
+  "ruff>=0.9.2",
+]
+
+[project.scripts]
+vidiom = "vidiom.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vidiom"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+

@@ -1,0 +1,17 @@
+[Unit]
+Description=Vidiom hourly short-drama generator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/vidiom
+EnvironmentFile=/opt/vidiom/.env
+ExecStart=/opt/vidiom/.venv/bin/vidiom scheduler
+Restart=on-failure
+RestartSec=10
+User=vidiom
+Group=vidiom
+
+[Install]
+WantedBy=multi-user.target
+
