@@ -1,0 +1,17 @@
+[Unit]
+Description=Vidiom Studio web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/vidiom
+EnvironmentFile=/opt/vidiom/.env
+ExecStart=/opt/vidiom/.venv/bin/vidiom serve --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=10
+User=vidiom
+Group=vidiom
+
+[Install]
+WantedBy=multi-user.target
+

@@ -3,9 +3,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.playwright-cli/
 .env
 data/
+output/
 out/
 dist/
 *.egg-info/
-

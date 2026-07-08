@@ -101,3 +101,13 @@ def export_production(production_id: int, output: Path) -> None:
 @app.command("scheduler")
 def scheduler_command() -> None:
     start_scheduler(Settings.from_env())
+
+
+@app.command("serve")
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind host."),
+    port: int = typer.Option(8000, help="Bind port."),
+) -> None:
+    import uvicorn
+
+    uvicorn.run("vidiom.web:app", host=host, port=port, reload=False)

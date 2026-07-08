@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vidiom Studio</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">V</span>
+          <div>
+            <strong>Vidiom Studio</strong>
+            <span id="projectStatus">Ready</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="refreshProjects" class="icon-button" title="刷新项目">
+            <span aria-hidden="true">↻</span>
+          </button>
+          <button id="runProject" class="primary-button" disabled>运行 Agent</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <section class="panel seed-panel">
+            <label for="seedText">一句话</label>
+            <textarea
+              id="seedText"
+              rows="7"
+              placeholder="一个北漂剪辑师发现客户给的素材里藏着未来事故。"
+            ></textarea>
+            <button id="createProject" class="primary-button full-width">生成画布</button>
+          </section>
+
+          <section class="panel projects-panel">
+            <div class="panel-title">Projects</div>
+            <div id="projectList" class="project-list"></div>
+          </section>
+        </aside>
+
+        <section class="canvas-panel" aria-label="Agent canvas">
+          <div class="canvas-toolbar">
+            <div>
+              <span id="canvasTitle" class="canvas-title">Untitled</span>
+              <span id="canvasMeta" class="canvas-meta"></span>
+            </div>
+          </div>
+          <div class="canvas-viewport">
+            <div id="canvasBoard" class="canvas-board">
+              <svg id="edgeLayer" class="edge-layer" viewBox="0 0 1480 640"></svg>
+              <div id="nodeLayer" class="node-layer"></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="inspector">
+          <section class="panel">
+            <div class="panel-title">Inspector</div>
+            <div id="inspectorBody" class="inspector-body"></div>
+          </section>
+          <section class="panel script-panel">
+            <div class="panel-title">Script</div>
+            <div id="scriptPreview" class="script-preview"></div>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

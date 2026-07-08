@@ -18,5 +18,6 @@ RUN useradd --create-home --shell /usr/sbin/nologin vidiom \
 USER vidiom
 
 VOLUME ["/data"]
-CMD ["vidiom", "scheduler"]
+EXPOSE 8000
+CMD ["vidiom", "serve", "--host", "0.0.0.0", "--port", "8000"]
 
