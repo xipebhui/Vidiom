@@ -109,6 +109,35 @@ async function runProject() {
   }
 }
 
+async function saveDraftEdits(event) {
+  event.preventDefault();
+  if (!state.project || state.project.status !== "draft") return;
+
+  const form = event.currentTarget;
+  const title = form.querySelector("[name='title']").value;
+  const seedText = form.querySelector("[name='seed_text']").value.trim();
+  if (!seedText) {
+    showError("一句话不能为空。");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title, seed_text: seedText }),
+    });
+    state.project = body.project;
+    state.selectedKey = "seed";
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 function render() {
   renderHeader();
   renderProjects();
@@ -202,6 +231,27 @@ function renderInspector() {
     return;
   }
 
+  if (node.key === "seed" && state.project?.status === "draft") {
+    const seedText = node.output?.text || state.project.seed_text;
+    el.inspectorBody.innerHTML = `
+      <form id="draftEditor" class="draft-editor">
+        <label for="draftTitle">Title</label>
+        <input
+          id="draftTitle"
+          name="title"
+          maxlength="120"
+          value="${escapeHtml(state.project.title || "")}"
+          placeholder="未命名短剧"
+        />
+        <label for="draftSeed">一句话</label>
+        <textarea id="draftSeed" name="seed_text" rows="8">${escapeHtml(seedText)}</textarea>
+        <button class="primary-button full-width" type="submit">保存草稿</button>
+      </form>
+    `;
+    el.inspectorBody.querySelector("#draftEditor").addEventListener("submit", saveDraftEdits);
+    return;
+  }
+
   const output = node.output ? JSON.stringify(node.output, null, 2) : "";
   el.inspectorBody.innerHTML = `
     <div class="kv">
@@ -292,4 +342,3 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
-

@@ -429,6 +429,60 @@ class Storage:
                 (title, utc_now(), project_id),
             )
 
+    def update_draft_project(
+        self, project_id: int, seed_text: str | None, title: str | None
+    ) -> None:
+        now = utc_now()
+        clean_seed_text = seed_text.strip() if seed_text is not None else None
+        clean_title = title.strip() if title is not None else None
+        if clean_seed_text == "":
+            raise ValueError("Seed text cannot be empty.")
+        if clean_title == "":
+            clean_title = None
+
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, inspiration_id, status, seed_text, title
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            if project["status"] != "draft":
+                raise RuntimeError("Only draft projects can be edited.")
+
+            next_seed_text = (
+                clean_seed_text if clean_seed_text is not None else project["seed_text"]
+            )
+            next_title = clean_title if title is not None else project["title"]
+            conn.execute(
+                """
+                UPDATE projects
+                SET seed_text = ?, title = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_seed_text, next_title, now, project_id),
+            )
+            conn.execute(
+                """
+                UPDATE inspirations
+                SET text = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_seed_text, now, project["inspiration_id"]),
+            )
+            conn.execute(
+                """
+                UPDATE canvas_nodes
+                SET output_json = ?, updated_at = ?
+                WHERE project_id = ? AND node_key = 'seed'
+                """,
+                (_json_or_none({"text": next_seed_text}), now, project_id),
+            )
+
     def update_canvas_node_status(
         self, project_id: int, node_key: str, status: str, error: str | None
     ) -> None:

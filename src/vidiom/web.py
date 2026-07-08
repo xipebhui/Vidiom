@@ -23,6 +23,11 @@ class CreateProjectRequest(BaseModel):
     seed_text: str = Field(min_length=2, max_length=2000)
 
 
+class UpdateProjectRequest(BaseModel):
+    seed_text: str | None = Field(default=None, min_length=2, max_length=2000)
+    title: str | None = Field(default=None, max_length=120)
+
+
 class RunProjectResponse(BaseModel):
     project: dict
 
@@ -80,6 +85,27 @@ def get_project(project_id: int, storage: Annotated[Storage, Depends(get_storage
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.patch("/api/projects/{project_id}")
+def update_project(
+    project_id: int,
+    request: UpdateProjectRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    if request.seed_text is None and request.title is None:
+        raise HTTPException(status_code=400, detail="Provide seed_text or title.")
+    try:
+        storage.update_draft_project(
+            project_id=project_id,
+            seed_text=request.seed_text,
+            title=request.title,
+        )
+        return {"project": storage.get_project(project_id)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/projects/{project_id}/run", response_model=RunProjectResponse)
 def run_project(
     project_id: int,
@@ -97,4 +123,3 @@ def run_project(
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"project": project}
-
