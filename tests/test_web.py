@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from test_schema import valid_payload
 
+from vidiom.canvas import create_canvas_project
 from vidiom.config import Settings
 from vidiom.storage import Storage
 from vidiom.web import STATIC_DIR, app, get_settings, get_storage
@@ -11,9 +13,11 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     index_html = (STATIC_DIR / "index.html").read_text()
     app_js = (STATIC_DIR / "app.js").read_text()
 
+    assert 'id="exportProject"' in index_html
     assert 'data-review-tab="script"' in index_html
     assert 'data-review-tab="characters"' in index_html
     assert 'data-review-tab="production"' in index_html
+    assert "async function downloadProjectExport" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
 
@@ -135,3 +139,96 @@ def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
     assert activity[1]["description"] == "一个剪辑师发现素材里藏着未来事故。"
     assert activity[-1]["title"] == "Production Agent"
     assert activity[-1]["status"] == "pending"
+
+
+def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(project_id, "script", valid_payload())
+    storage.complete_canvas_node(project_id, "production", production_output())
+    storage.update_project_title(project_id, "倒计时素材")
+    storage.update_project_status(project_id, "completed")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.get(f"/api/projects/{project_id}/export")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json; charset=utf-8"
+    assert (
+        "filename*=UTF-8''vidiom-%E5%80%92%E8%AE%A1%E6%97%B6%E7%B4%A0%E6%9D%90.json"
+        in response.headers["content-disposition"]
+    )
+    body = response.json()
+    assert body["project"]["title"] == "倒计时素材"
+    assert body["deliverables"]["script"]["title"] == "倒计时素材"
+    assert body["deliverables"]["production_pack"]["shot_plan"][0]["shot"] == "屏幕特写"
+    assert body["agent_outputs"]["seed"]["text"] == "一个剪辑师发现素材里藏着未来事故。"
+
+
+def test_export_project_api_rejects_draft_project(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.get(f"/api/projects/{project_id}/export")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Project is not ready to export."
+
+
+def production_output() -> dict:
+    return {
+        "visual_style": "冷色剪辑室和清晨街口形成对照",
+        "locations": ["剪辑室", "街口"],
+        "props": ["电脑", "手机", "白车线索"],
+        "shot_plan": [
+            {"shot": "屏幕特写", "purpose": "展示异常素材", "duration_seconds": 8},
+            {"shot": "手机近景", "purpose": "呈现客户施压", "duration_seconds": 6},
+            {"shot": "手持跟拍", "purpose": "制造奔跑紧迫感", "duration_seconds": 12},
+            {"shot": "街口广角", "purpose": "确认事故空间", "duration_seconds": 9},
+            {"shot": "直播推近", "purpose": "完成主角选择", "duration_seconds": 10},
+        ],
+        "edit_notes": ["前 3 秒必须出现异常画面", "电话声做压迫节奏", "结尾保留警笛声"],
+    }

@@ -412,6 +412,39 @@ class Storage:
             )
         return activity
 
+    def export_project_package(self, project_id: int) -> dict[str, Any]:
+        project = self.get_project(project_id)
+        nodes = {node["key"]: node for node in project["nodes"]}
+        script = nodes.get("script", {}).get("output")
+        production = nodes.get("production", {}).get("output")
+        if (
+            project["status"] != "completed"
+            or not project["title"]
+            or script is None
+            or production is None
+        ):
+            raise RuntimeError("Project is not ready to export.")
+
+        return {
+            "project": {
+                "id": project["id"],
+                "title": project["title"],
+                "status": project["status"],
+                "seed_text": project["seed_text"],
+                "created_at": project["created_at"],
+                "updated_at": project["updated_at"],
+            },
+            "deliverables": {
+                "script": script,
+                "production_pack": production,
+            },
+            "agent_outputs": {
+                key: node["output"]
+                for key, node in nodes.items()
+                if node["output"] is not None
+            },
+        }
+
     def get_canvas_node(self, project_id: int, node_key: str) -> dict[str, Any]:
         with self.connect() as conn:
             row = conn.execute(

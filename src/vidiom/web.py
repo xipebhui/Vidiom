@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -86,6 +88,23 @@ def get_project(project_id: int, storage: Annotated[Storage, Depends(get_storage
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/projects/{project_id}/export")
+def export_project(project_id: int, storage: Annotated[Storage, Depends(get_storage)]) -> Response:
+    try:
+        payload = storage.export_project_package(project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    filename = _export_filename(payload)
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False, indent=2),
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 @app.patch("/api/projects/{project_id}")
 def update_project(
     project_id: int,
@@ -131,3 +150,13 @@ def _project_response(storage: Storage, project_id: int) -> dict:
         "project": storage.get_project(project_id),
         "activity": storage.get_project_activity(project_id),
     }
+
+
+def _export_filename(payload: dict) -> str:
+    project = payload["project"]
+    raw_title = str(project["title"])
+    safe_title = "".join(
+        character.lower() if character.isalnum() else "-"
+        for character in raw_title.strip()
+    ).strip("-")
+    return f"vidiom-{safe_title}.json"

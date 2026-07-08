@@ -11,6 +11,7 @@ const el = {
   seedText: document.querySelector("#seedText"),
   createProject: document.querySelector("#createProject"),
   refreshProjects: document.querySelector("#refreshProjects"),
+  exportProject: document.querySelector("#exportProject"),
   runProject: document.querySelector("#runProject"),
   projectList: document.querySelector("#projectList"),
   nodeLayer: document.querySelector("#nodeLayer"),
@@ -26,6 +27,7 @@ const el = {
 
 el.createProject.addEventListener("click", createProject);
 el.refreshProjects.addEventListener("click", loadProjects);
+el.exportProject.addEventListener("click", downloadProjectExport);
 el.runProject.addEventListener("click", runProject);
 el.reviewTabs.forEach((tab) => {
   tab.addEventListener("click", () => {
@@ -152,6 +154,33 @@ async function saveDraftEdits(event) {
   }
 }
 
+async function downloadProjectExport() {
+  if (!state.project || !projectCanExport(state.project)) return;
+
+  setBusy(true);
+  try {
+    const response = await fetch(`/api/projects/${state.project.id}/export`);
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.detail);
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = exportFileName(state.project);
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 function render() {
   renderHeader();
   renderProjects();
@@ -164,6 +193,7 @@ function render() {
 function renderHeader() {
   const project = state.project;
   el.runProject.disabled = !project || state.running || project.status === "running";
+  el.exportProject.disabled = !project || state.running || !projectCanExport(project);
   el.canvasTitle.textContent = project?.title || "Untitled";
   el.canvasMeta.textContent = project ? `#${project.id} · ${project.status}` : "";
   el.projectStatus.textContent = project ? project.status : "Ready";
@@ -542,6 +572,7 @@ function setBusy(isBusy) {
   state.running = isBusy;
   el.createProject.disabled = isBusy;
   el.refreshProjects.disabled = isBusy;
+  el.exportProject.disabled = isBusy || !state.project || !projectCanExport(state.project);
   renderHeader();
 }
 
@@ -567,4 +598,24 @@ function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function projectCanExport(project) {
+  const script = project.nodes.find((node) => node.key === "script");
+  const production = project.nodes.find((node) => node.key === "production");
+  return (
+    project.status === "completed" &&
+    Boolean(project.title) &&
+    Boolean(script?.output) &&
+    Boolean(production?.output)
+  );
+}
+
+function exportFileName(project) {
+  const safeTitle = project.title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `vidiom-${safeTitle}.json`;
 }
