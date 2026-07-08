@@ -34,9 +34,35 @@
             <label for="seedText">一句话</label>
             <textarea
               id="seedText"
+              name="seed_text"
               rows="7"
               placeholder="一个北漂剪辑师发现客户给的素材里藏着未来事故。"
             ></textarea>
+            <div class="brief-grid">
+              <label for="seedDuration">时长</label>
+              <select id="seedDuration" name="duration_minutes">
+                <option value="3">3 分钟</option>
+                <option value="5" selected>5 分钟</option>
+                <option value="8">8 分钟</option>
+              </select>
+              <label for="seedAspect">画幅</label>
+              <select id="seedAspect" name="aspect_ratio">
+                <option value="9:16 vertical" selected>9:16 竖屏</option>
+                <option value="1:1 square">1:1 方屏</option>
+                <option value="16:9 landscape">16:9 横屏</option>
+              </select>
+              <label for="seedTone">语气</label>
+              <input id="seedTone" name="tone" maxlength="80" value="强钩子、快反转、可拍摄" />
+              <label for="seedAudience">观众</label>
+              <input id="seedAudience" name="target_audience" maxlength="120" value="18-35 岁短剧用户" />
+              <label for="seedMustInclude">必含要素</label>
+              <textarea
+                id="seedMustInclude"
+                name="must_include"
+                rows="3"
+                maxlength="500"
+              ></textarea>
+            </div>
             <button id="createProject" class="primary-button full-width">生成画布</button>
           </section>
 

@@ -90,6 +90,7 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     inspiration_id INTEGER NOT NULL,
                     seed_text TEXT NOT NULL,
+                    brief_json TEXT,
                     title TEXT,
                     status TEXT NOT NULL DEFAULT 'draft',
                     last_error TEXT,
@@ -125,6 +126,11 @@ class Storage:
                 );
                 """
             )
+            project_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            if "brief_json" not in project_columns:
+                conn.execute("ALTER TABLE projects ADD COLUMN brief_json TEXT")
 
     def add_inspiration(
         self, text: str, source_type: str = "manual", source_ref: str | None = None
@@ -275,16 +281,18 @@ class Storage:
                 created_at=row["created_at"],
             )
 
-    def create_project(self, seed_text: str) -> int:
+    def create_project(self, seed_text: str, brief: dict[str, Any] | None = None) -> int:
         inspiration_id = self.add_inspiration(seed_text, source_type="studio", source_ref=None)
         now = utc_now()
         with self.connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO projects(inspiration_id, seed_text, status, created_at, updated_at)
-                VALUES (?, ?, 'draft', ?, ?)
+                INSERT INTO projects(
+                    inspiration_id, seed_text, brief_json, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'draft', ?, ?)
                 """,
-                (inspiration_id, seed_text.strip(), now, now),
+                (inspiration_id, seed_text.strip(), _json_or_none(brief), now, now),
             )
             return int(cursor.lastrowid)
 
@@ -336,7 +344,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT
-                    id, inspiration_id, seed_text, title,
+                    id, inspiration_id, seed_text, brief_json, title,
                     status, last_error, created_at, updated_at
                 FROM projects
                 ORDER BY id DESC
@@ -351,7 +359,7 @@ class Storage:
             project_row = conn.execute(
                 """
                 SELECT
-                    id, inspiration_id, seed_text, title,
+                    id, inspiration_id, seed_text, brief_json, title,
                     status, last_error, created_at, updated_at
                 FROM projects
                 WHERE id = ?
@@ -431,6 +439,7 @@ class Storage:
                 "title": project["title"],
                 "status": project["status"],
                 "seed_text": project["seed_text"],
+                "brief": project["brief"],
                 "created_at": project["created_at"],
                 "updated_at": project["updated_at"],
             },
@@ -486,7 +495,11 @@ class Storage:
             )
 
     def update_draft_project(
-        self, project_id: int, seed_text: str | None, title: str | None
+        self,
+        project_id: int,
+        seed_text: str | None,
+        title: str | None,
+        brief: dict[str, Any] | None = None,
     ) -> None:
         now = utc_now()
         clean_seed_text = seed_text.strip() if seed_text is not None else None
@@ -499,7 +512,7 @@ class Storage:
         with self.connect() as conn:
             project = conn.execute(
                 """
-                SELECT id, inspiration_id, status, seed_text, title
+                SELECT id, inspiration_id, status, seed_text, brief_json, title
                 FROM projects
                 WHERE id = ?
                 """,
@@ -514,13 +527,14 @@ class Storage:
                 clean_seed_text if clean_seed_text is not None else project["seed_text"]
             )
             next_title = clean_title if title is not None else project["title"]
+            next_brief = brief if brief is not None else _json_from_column(project["brief_json"])
             conn.execute(
                 """
                 UPDATE projects
-                SET seed_text = ?, title = ?, updated_at = ?
+                SET seed_text = ?, brief_json = ?, title = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (next_seed_text, next_title, now, project_id),
+                (next_seed_text, _json_or_none(next_brief), next_title, now, project_id),
             )
             conn.execute(
                 """
@@ -536,7 +550,7 @@ class Storage:
                 SET output_json = ?, updated_at = ?
                 WHERE project_id = ? AND node_key = 'seed'
                 """,
-                (_json_or_none({"text": next_seed_text}), now, project_id),
+                (_json_or_none(_seed_output(next_seed_text, next_brief)), now, project_id),
             )
 
     def update_canvas_node_status(
@@ -574,11 +588,25 @@ def _json_or_none(payload: dict[str, Any] | None) -> str | None:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _json_from_column(payload_json: str | None) -> dict[str, Any] | None:
+    if not payload_json:
+        return None
+    return json.loads(payload_json)
+
+
+def _seed_output(seed_text: str, brief: dict[str, Any] | None) -> dict[str, Any]:
+    output: dict[str, Any] = {"text": seed_text}
+    if brief is not None:
+        output["brief"] = brief
+    return output
+
+
 def _project_row(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "inspiration_id": row["inspiration_id"],
         "seed_text": row["seed_text"],
+        "brief": _json_from_column(row["brief_json"]),
         "title": row["title"],
         "status": row["status"],
         "last_error": row["last_error"],

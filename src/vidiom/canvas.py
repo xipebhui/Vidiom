@@ -130,8 +130,13 @@ class OpenAICanvasAgent:
         return payload
 
 
-def create_canvas_project(storage: Storage, seed_text: str) -> int:
-    project_id = storage.create_project(seed_text)
+def create_canvas_project(
+    storage: Storage, seed_text: str, brief: dict[str, Any] | None = None
+) -> int:
+    project_id = storage.create_project(seed_text, brief)
+    seed_output: dict[str, Any] = {"text": seed_text}
+    if brief is not None:
+        seed_output["brief"] = brief
     storage.create_canvas_node(
         project_id=project_id,
         node_key="seed",
@@ -140,7 +145,7 @@ def create_canvas_project(storage: Storage, seed_text: str) -> int:
         x=40,
         y=96,
         status="completed",
-        output={"text": seed_text},
+        output=seed_output,
     )
     for step in AGENT_STEPS:
         storage.create_canvas_node(
@@ -160,7 +165,7 @@ def create_canvas_project(storage: Storage, seed_text: str) -> int:
 def run_canvas_project(storage: Storage, project_id: int, agent: CanvasAgent) -> dict[str, Any]:
     project = storage.get_project(project_id)
     seed_text = str(project["seed_text"])
-    context: dict[str, Any] = {}
+    context: dict[str, Any] = {"creative_brief": project["brief"]}
     storage.update_project_status(project_id, "running")
 
     try:
@@ -203,4 +208,3 @@ def _active_step_key(nodes: list[dict[str, Any]]) -> str | None:
         if node["status"] == "running":
             return str(node["key"])
     return None
-

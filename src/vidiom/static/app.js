@@ -23,6 +23,7 @@ const el = {
   scriptPreview: document.querySelector("#scriptPreview"),
   reviewTabs: document.querySelectorAll(".review-tab"),
   activityTimeline: document.querySelector("#activityTimeline"),
+  seedPanel: document.querySelector(".seed-panel"),
 };
 
 el.createProject.addEventListener("click", createProject);
@@ -88,7 +89,7 @@ async function createProject() {
   try {
     const body = await api("/api/projects", {
       method: "POST",
-      body: JSON.stringify({ seed_text: seedText }),
+      body: JSON.stringify({ seed_text: seedText, brief: briefFromForm(el.seedPanel) }),
     });
     state.project = body.project;
     state.activity = body.activity || [];
@@ -140,7 +141,7 @@ async function saveDraftEdits(event) {
   try {
     const body = await api(`/api/projects/${state.project.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ title, seed_text: seedText }),
+      body: JSON.stringify({ title, seed_text: seedText, brief: briefFromForm(form) }),
     });
     state.project = body.project;
     state.activity = body.activity || [];
@@ -290,6 +291,7 @@ function renderInspector() {
         />
         <label for="draftSeed">一句话</label>
         <textarea id="draftSeed" name="seed_text" rows="8">${escapeHtml(seedText)}</textarea>
+        ${renderBriefFields(state.project.brief)}
         <button class="primary-button full-width" type="submit">保存草稿</button>
       </form>
     `;
@@ -522,6 +524,59 @@ function renderChecklist(label, items) {
       </ul>
     </div>
   `;
+}
+
+function renderBriefFields(brief = {}) {
+  const values = brief || {};
+  return `
+    <div class="brief-grid">
+      <label for="draftDuration">时长</label>
+      <select id="draftDuration" name="duration_minutes">
+        ${renderOption("3", "3 分钟", values.duration_minutes)}
+        ${renderOption("5", "5 分钟", values.duration_minutes)}
+        ${renderOption("8", "8 分钟", values.duration_minutes)}
+      </select>
+      <label for="draftAspect">画幅</label>
+      <select id="draftAspect" name="aspect_ratio">
+        ${renderOption("9:16 vertical", "9:16 竖屏", values.aspect_ratio)}
+        ${renderOption("1:1 square", "1:1 方屏", values.aspect_ratio)}
+        ${renderOption("16:9 landscape", "16:9 横屏", values.aspect_ratio)}
+      </select>
+      <label for="draftTone">语气</label>
+      <input id="draftTone" name="tone" maxlength="80" value="${escapeHtml(values.tone || "")}" />
+      <label for="draftAudience">观众</label>
+      <input
+        id="draftAudience"
+        name="target_audience"
+        maxlength="120"
+        value="${escapeHtml(values.target_audience || "")}"
+      />
+      <label for="draftMustInclude">必含要素</label>
+      <textarea id="draftMustInclude" name="must_include" rows="3" maxlength="500">${escapeHtml(
+        values.must_include || "",
+      )}</textarea>
+    </div>
+  `;
+}
+
+function renderOption(value, label, selectedValue) {
+  const selected = String(selectedValue || "") === value ? " selected" : "";
+  return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`;
+}
+
+function briefFromForm(container) {
+  const duration = container.querySelector("[name='duration_minutes']")?.value;
+  const brief = {
+    duration_minutes: duration ? Number(duration) : null,
+    aspect_ratio: container.querySelector("[name='aspect_ratio']")?.value.trim(),
+    tone: container.querySelector("[name='tone']")?.value.trim(),
+    target_audience: container.querySelector("[name='target_audience']")?.value.trim(),
+    must_include: container.querySelector("[name='must_include']")?.value.trim(),
+  };
+
+  return Object.fromEntries(
+    Object.entries(brief).filter(([, value]) => value !== null && value !== ""),
+  );
 }
 
 function renderActivity() {

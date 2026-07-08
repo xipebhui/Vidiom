@@ -52,7 +52,11 @@ def test_project_canvas_persists_nodes_and_edges(tmp_path: Path) -> None:
 
 
 class FakeCanvasAgent:
+    def __init__(self) -> None:
+        self.contexts: list[tuple[str, dict]] = []
+
     def generate_step(self, step: CanvasAgentStep, seed_text: str, context: dict) -> dict:
+        self.contexts.append((step.key, dict(context)))
         if step.key == "premise":
             return {
                 "one_sentence_pitch": f"{seed_text} 触发一场倒计时救援。",
@@ -115,12 +119,23 @@ class FakeCanvasAgent:
 def test_run_canvas_project_persists_review_outputs(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "vidiom.sqlite3")
     storage.migrate()
-    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    brief = {
+        "duration_minutes": 5,
+        "aspect_ratio": "9:16 vertical",
+        "tone": "强钩子、快反转",
+        "target_audience": "18-35 岁短剧用户",
+        "must_include": "前三秒出现异常素材",
+    }
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。", brief)
+    agent = FakeCanvasAgent()
 
-    project = run_canvas_project(storage, project_id, FakeCanvasAgent())
+    project = run_canvas_project(storage, project_id, agent)
 
     nodes = {node["key"]: node for node in project["nodes"]}
     assert project["status"] == "completed"
     assert project["title"] == "倒计时素材"
+    assert project["brief"]["aspect_ratio"] == "9:16 vertical"
+    assert nodes["seed"]["output"]["brief"]["must_include"] == "前三秒出现异常素材"
+    assert agent.contexts[0][1]["creative_brief"]["duration_minutes"] == 5
     assert nodes["script"]["output"]["scenes"][0]["dialogue"][0]["speaker"] == "林澈"
     assert nodes["production"]["output"]["shot_plan"][0]["shot"] == "屏幕特写"

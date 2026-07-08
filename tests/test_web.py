@@ -14,9 +14,13 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     app_js = (STATIC_DIR / "app.js").read_text()
 
     assert 'id="exportProject"' in index_html
+    assert 'name="duration_minutes"' in index_html
+    assert 'name="aspect_ratio"' in index_html
     assert 'data-review-tab="script"' in index_html
     assert 'data-review-tab="characters"' in index_html
     assert 'data-review-tab="production"' in index_html
+    assert "function briefFromForm" in app_js
+    assert "function renderBriefFields" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
@@ -45,7 +49,16 @@ def test_create_project_api(tmp_path) -> None:
         client = TestClient(app)
         response = client.post(
             "/api/projects",
-            json={"seed_text": "一个剪辑师发现素材里藏着未来事故。"},
+            json={
+                "seed_text": "一个剪辑师发现素材里藏着未来事故。",
+                "brief": {
+                    "duration_minutes": 5,
+                    "aspect_ratio": "9:16 vertical",
+                    "tone": "强钩子、快反转",
+                    "target_audience": "18-35 岁短剧用户",
+                    "must_include": "前三秒出现异常素材",
+                },
+            },
         )
     finally:
         app.dependency_overrides.clear()
@@ -53,7 +66,10 @@ def test_create_project_api(tmp_path) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["project"]["status"] == "draft"
+    assert body["project"]["brief"]["duration_minutes"] == 5
+    assert body["project"]["brief"]["must_include"] == "前三秒出现异常素材"
     assert body["project"]["nodes"][0]["key"] == "seed"
+    assert body["project"]["nodes"][0]["output"]["brief"]["aspect_ratio"] == "9:16 vertical"
 
 
 def test_update_draft_project_api_updates_seed_node(tmp_path) -> None:
@@ -88,6 +104,13 @@ def test_update_draft_project_api_updates_seed_node(tmp_path) -> None:
             json={
                 "title": "未来素材案",
                 "seed_text": "一个剪辑师在客户素材里看见明天的事故现场。",
+                "brief": {
+                    "duration_minutes": 8,
+                    "aspect_ratio": "16:9 landscape",
+                    "tone": "现实悬疑",
+                    "target_audience": "都市悬疑用户",
+                    "must_include": "结尾保留新倒计时",
+                },
             },
         )
     finally:
@@ -97,7 +120,10 @@ def test_update_draft_project_api_updates_seed_node(tmp_path) -> None:
     project = response.json()["project"]
     assert project["title"] == "未来素材案"
     assert project["seed_text"] == "一个剪辑师在客户素材里看见明天的事故现场。"
+    assert project["brief"]["duration_minutes"] == 8
+    assert project["brief"]["tone"] == "现实悬疑"
     assert project["nodes"][0]["output"]["text"] == project["seed_text"]
+    assert project["nodes"][0]["output"]["brief"]["must_include"] == "结尾保留新倒计时"
 
 
 def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
@@ -181,6 +207,7 @@ def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> N
     )
     body = response.json()
     assert body["project"]["title"] == "倒计时素材"
+    assert body["project"]["brief"] is None
     assert body["deliverables"]["script"]["title"] == "倒计时素材"
     assert body["deliverables"]["production_pack"]["shot_plan"][0]["shot"] == "屏幕特写"
     assert body["agent_outputs"]["seed"]["text"] == "一个剪辑师发现素材里藏着未来事故。"

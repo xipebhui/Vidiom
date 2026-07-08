@@ -21,13 +21,23 @@ load_dotenv()
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+class CreativeBriefRequest(BaseModel):
+    duration_minutes: int | None = Field(default=None, ge=1, le=15)
+    aspect_ratio: str | None = Field(default=None, max_length=32)
+    tone: str | None = Field(default=None, max_length=80)
+    target_audience: str | None = Field(default=None, max_length=120)
+    must_include: str | None = Field(default=None, max_length=500)
+
+
 class CreateProjectRequest(BaseModel):
     seed_text: str = Field(min_length=2, max_length=2000)
+    brief: CreativeBriefRequest | None = None
 
 
 class UpdateProjectRequest(BaseModel):
     seed_text: str | None = Field(default=None, min_length=2, max_length=2000)
     title: str | None = Field(default=None, max_length=120)
+    brief: CreativeBriefRequest | None = None
 
 
 class RunProjectResponse(BaseModel):
@@ -76,7 +86,7 @@ def create_project(
     request: CreateProjectRequest,
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> dict:
-    project_id = create_canvas_project(storage, request.seed_text)
+    project_id = create_canvas_project(storage, request.seed_text, _brief_payload(request.brief))
     return _project_response(storage, project_id)
 
 
@@ -111,13 +121,14 @@ def update_project(
     request: UpdateProjectRequest,
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> dict:
-    if request.seed_text is None and request.title is None:
-        raise HTTPException(status_code=400, detail="Provide seed_text or title.")
+    if request.seed_text is None and request.title is None and request.brief is None:
+        raise HTTPException(status_code=400, detail="Provide seed_text, title, or brief.")
     try:
         storage.update_draft_project(
             project_id=project_id,
             seed_text=request.seed_text,
             title=request.title,
+            brief=_brief_payload(request.brief),
         )
         return _project_response(storage, project_id)
     except LookupError as exc:
@@ -150,6 +161,20 @@ def _project_response(storage: Storage, project_id: int) -> dict:
         "project": storage.get_project(project_id),
         "activity": storage.get_project_activity(project_id),
     }
+
+
+def _brief_payload(brief: CreativeBriefRequest | None) -> dict | None:
+    if brief is None:
+        return None
+    payload: dict = {}
+    for key, value in brief.model_dump(exclude_none=True).items():
+        if isinstance(value, str):
+            clean_value = value.strip()
+            if clean_value:
+                payload[key] = clean_value
+        else:
+            payload[key] = value
+    return payload or None
 
 
 def _export_filename(payload: dict) -> str:
