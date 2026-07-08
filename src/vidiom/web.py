@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -45,6 +45,9 @@ class RunProjectResponse(BaseModel):
     activity: list[dict]
 
 
+ProjectStatusFilter = Literal["draft", "running", "completed", "failed"]
+
+
 def get_settings() -> Settings:
     return Settings.from_env()
 
@@ -77,8 +80,13 @@ def health(settings: Annotated[Settings, Depends(get_settings)]) -> dict:
 
 
 @app.get("/api/projects")
-def list_projects(storage: Annotated[Storage, Depends(get_storage)], limit: int = 20) -> dict:
-    return {"projects": storage.list_projects(limit=limit)}
+def list_projects(
+    storage: Annotated[Storage, Depends(get_storage)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    status: ProjectStatusFilter | None = None,
+    q: Annotated[str | None, Query(max_length=120)] = None,
+) -> dict:
+    return {"projects": storage.list_projects(limit=limit, status=status, search=q)}
 
 
 @app.post("/api/projects")

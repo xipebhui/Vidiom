@@ -14,6 +14,8 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     app_js = (STATIC_DIR / "app.js").read_text()
 
     assert 'id="exportProject"' in index_html
+    assert 'id="projectSearch"' in index_html
+    assert 'id="projectStatusFilter"' in index_html
     assert 'name="duration_minutes"' in index_html
     assert 'name="aspect_ratio"' in index_html
     assert 'data-review-tab="script"' in index_html
@@ -21,6 +23,8 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert 'data-review-tab="production"' in index_html
     assert "function briefFromForm" in app_js
     assert "function renderBriefFields" in app_js
+    assert "function projectListQuery" in app_js
+    assert "function applyProjectFilters" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
@@ -70,6 +74,50 @@ def test_create_project_api(tmp_path) -> None:
     assert body["project"]["brief"]["must_include"] == "前三秒出现异常素材"
     assert body["project"]["nodes"][0]["key"] == "seed"
     assert body["project"]["nodes"][0]["output"]["brief"]["aspect_ratio"] == "9:16 vertical"
+
+
+def test_list_projects_api_filters_by_status_and_query(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    draft_id = create_canvas_project(storage, "一个旧剧本顾问被迫重写失败短剧。")
+    completed_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    failed_id = create_canvas_project(storage, "一个制片人在直播间遇到消失的主演。")
+    storage.update_project_title(completed_id, "未来素材案")
+    storage.update_project_status(completed_id, "completed")
+    storage.update_project_status(failed_id, "failed", "模型返回结构无效")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        completed_response = client.get("/api/projects?status=completed")
+        search_response = client.get("/api/projects?q=未来素材")
+        failed_search_response = client.get("/api/projects?status=failed&q=直播间")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert completed_response.status_code == 200
+    assert [project["id"] for project in completed_response.json()["projects"]] == [completed_id]
+    assert search_response.status_code == 200
+    assert [project["id"] for project in search_response.json()["projects"]] == [completed_id]
+    assert failed_search_response.status_code == 200
+    assert [project["id"] for project in failed_search_response.json()["projects"]] == [failed_id]
+    assert draft_id not in [project["id"] for project in search_response.json()["projects"]]
 
 
 def test_update_draft_project_api_updates_seed_node(tmp_path) -> None:

@@ -5,6 +5,11 @@ const state = {
   selectedKey: "seed",
   reviewTab: "script",
   running: false,
+  projectFilters: {
+    search: "",
+    status: "",
+  },
+  projectListRequestId: 0,
 };
 
 const el = {
@@ -13,6 +18,8 @@ const el = {
   refreshProjects: document.querySelector("#refreshProjects"),
   exportProject: document.querySelector("#exportProject"),
   runProject: document.querySelector("#runProject"),
+  projectSearch: document.querySelector("#projectSearch"),
+  projectStatusFilter: document.querySelector("#projectStatusFilter"),
   projectList: document.querySelector("#projectList"),
   nodeLayer: document.querySelector("#nodeLayer"),
   edgeLayer: document.querySelector("#edgeLayer"),
@@ -30,6 +37,8 @@ el.createProject.addEventListener("click", createProject);
 el.refreshProjects.addEventListener("click", loadProjects);
 el.exportProject.addEventListener("click", downloadProjectExport);
 el.runProject.addEventListener("click", runProject);
+el.projectSearch.addEventListener("input", applyProjectFilters);
+el.projectStatusFilter.addEventListener("change", applyProjectFilters);
 el.reviewTabs.forEach((tab) => {
   tab.addEventListener("click", () => {
     state.reviewTab = tab.dataset.reviewTab;
@@ -53,10 +62,26 @@ async function api(path, options = {}) {
 
 async function loadProjects() {
   try {
-    const body = await api("/api/projects");
+    const requestId = state.projectListRequestId + 1;
+    state.projectListRequestId = requestId;
+    const currentProjectId = state.project?.id;
+    const body = await api(`/api/projects${projectListQuery()}`);
+    if (requestId !== state.projectListRequestId) return;
+
     state.projects = body.projects;
-    if (!state.project && state.projects.length > 0) {
+    const selectedProjectIsVisible = state.projects.some(
+      (project) => project.id === currentProjectId,
+    );
+    if (state.projects.length > 0 && (!state.project || !selectedProjectIsVisible)) {
       await loadProject(state.projects[0].id);
+      return;
+    }
+    if (state.projects.length === 0 && !selectedProjectIsVisible) {
+      state.project = null;
+      state.activity = [];
+      state.selectedKey = "seed";
+      render();
+      return;
     }
     renderProjects();
   } catch (error) {
@@ -95,6 +120,7 @@ async function createProject() {
     state.activity = body.activity || [];
     state.selectedKey = "seed";
     el.seedText.value = "";
+    resetProjectFilters();
     await loadProjects();
     render();
   } catch (error) {
@@ -102,6 +128,31 @@ async function createProject() {
   } finally {
     setBusy(false);
   }
+}
+
+function applyProjectFilters() {
+  state.projectFilters.search = el.projectSearch.value.trim();
+  state.projectFilters.status = el.projectStatusFilter.value;
+  loadProjects();
+}
+
+function resetProjectFilters() {
+  state.projectFilters.search = "";
+  state.projectFilters.status = "";
+  el.projectSearch.value = "";
+  el.projectStatusFilter.value = "";
+}
+
+function projectListQuery() {
+  const params = new URLSearchParams();
+  if (state.projectFilters.search) {
+    params.set("q", state.projectFilters.search);
+  }
+  if (state.projectFilters.status) {
+    params.set("status", state.projectFilters.status);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 async function runProject() {

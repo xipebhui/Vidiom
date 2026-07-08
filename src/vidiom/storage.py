@@ -339,18 +339,37 @@ class Storage:
                 [(project_id, source, target) for source, target in edges],
             )
 
-    def list_projects(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_projects(
+        self,
+        limit: int = 20,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions = []
+        params: list[Any] = []
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status)
+        if search is not None:
+            clean_search = search.strip()
+            if clean_search:
+                conditions.append("(seed_text LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')")
+                pattern = _like_pattern(clean_search)
+                params.extend([pattern, pattern])
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     id, inspiration_id, seed_text, brief_json, title,
                     status, last_error, created_at, updated_at
                 FROM projects
+                {where_clause}
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (*params, limit),
             ).fetchall()
             return [_project_row(row) for row in rows]
 
@@ -592,6 +611,11 @@ def _json_from_column(payload_json: str | None) -> dict[str, Any] | None:
     if not payload_json:
         return None
     return json.loads(payload_json)
+
+
+def _like_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _seed_output(seed_text: str, brief: dict[str, Any] | None) -> dict[str, Any]:

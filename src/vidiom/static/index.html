@@ -68,6 +68,18 @@
 
           <section class="panel projects-panel">
             <div class="panel-title">Projects</div>
+            <div class="project-filters">
+              <label class="sr-only" for="projectSearch">搜索项目</label>
+              <input id="projectSearch" type="search" placeholder="搜索标题或一句话" autocomplete="off" />
+              <label class="sr-only" for="projectStatusFilter">筛选状态</label>
+              <select id="projectStatusFilter">
+                <option value="">全部状态</option>
+                <option value="draft">Draft</option>
+                <option value="running">Running</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+              </select>
+            </div>
             <div id="projectList" class="project-list"></div>
           </section>
         </aside>

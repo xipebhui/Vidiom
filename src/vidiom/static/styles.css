@@ -214,6 +214,16 @@ textarea:focus {
   min-height: 300px;
 }
 
+.project-filters {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.project-filters input[type="search"] {
+  appearance: none;
+}
+
 .project-list {
   display: grid;
   gap: 8px;
@@ -730,6 +740,18 @@ pre {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .draft-editor {
