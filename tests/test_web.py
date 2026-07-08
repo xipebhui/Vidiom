@@ -4,7 +4,18 @@ from fastapi.testclient import TestClient
 
 from vidiom.config import Settings
 from vidiom.storage import Storage
-from vidiom.web import app, get_settings, get_storage
+from vidiom.web import STATIC_DIR, app, get_settings, get_storage
+
+
+def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
+    index_html = (STATIC_DIR / "index.html").read_text()
+    app_js = (STATIC_DIR / "app.js").read_text()
+
+    assert 'data-review-tab="script"' in index_html
+    assert 'data-review-tab="characters"' in index_html
+    assert 'data-review-tab="production"' in index_html
+    assert "function renderCharacterReview" in app_js
+    assert "function renderProductionReview" in app_js
 
 
 def test_create_project_api(tmp_path) -> None:

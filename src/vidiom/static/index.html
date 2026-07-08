@@ -63,8 +63,13 @@
             <div class="panel-title">Inspector</div>
             <div id="inspectorBody" class="inspector-body"></div>
           </section>
-          <section class="panel script-panel">
-            <div class="panel-title">Script</div>
+          <section class="panel review-panel">
+            <div class="panel-title">Review</div>
+            <div class="review-tabs" role="tablist" aria-label="成片审阅">
+              <button class="review-tab active" data-review-tab="script" type="button">脚本</button>
+              <button class="review-tab" data-review-tab="characters" type="button">角色</button>
+              <button class="review-tab" data-review-tab="production" type="button">拍摄</button>
+            </div>
             <div id="scriptPreview" class="script-preview"></div>
           </section>
           <section class="panel activity-panel">

@@ -3,6 +3,7 @@ const state = {
   project: null,
   activity: [],
   selectedKey: "seed",
+  reviewTab: "script",
   running: false,
 };
 
@@ -19,12 +20,19 @@ const el = {
   projectStatus: document.querySelector("#projectStatus"),
   inspectorBody: document.querySelector("#inspectorBody"),
   scriptPreview: document.querySelector("#scriptPreview"),
+  reviewTabs: document.querySelectorAll(".review-tab"),
   activityTimeline: document.querySelector("#activityTimeline"),
 };
 
 el.createProject.addEventListener("click", createProject);
 el.refreshProjects.addEventListener("click", loadProjects);
 el.runProject.addEventListener("click", runProject);
+el.reviewTabs.forEach((tab) => {
+  tab.addEventListener("click", () => {
+    state.reviewTab = tab.dataset.reviewTab;
+    renderScript();
+  });
+});
 
 loadProjects();
 
@@ -285,16 +293,63 @@ function renderInspector() {
 
 function renderScript() {
   const script = state.project?.nodes.find((node) => node.key === "script")?.output;
+  const production = state.project?.nodes.find((node) => node.key === "production")?.output;
+  renderReviewTabs(Boolean(script), Boolean(production));
   if (!script) {
-    el.scriptPreview.innerHTML = `<div class="empty">No script</div>`;
+    el.scriptPreview.innerHTML = `<div class="empty">No generated script</div>`;
     return;
   }
+
+  if (state.reviewTab === "characters") {
+    renderCharacterReview(script);
+    return;
+  }
+  if (state.reviewTab === "production") {
+    renderProductionReview(script, production);
+    return;
+  }
+
+  renderScriptReview(script);
+}
+
+function renderReviewTabs(hasScript, hasProduction) {
+  if (state.reviewTab === "production" && !hasProduction) {
+    state.reviewTab = "script";
+  }
+  el.reviewTabs.forEach((tab) => {
+    const isActive = tab.dataset.reviewTab === state.reviewTab;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-selected", String(isActive));
+    tab.disabled = !hasScript || (tab.dataset.reviewTab === "production" && !hasProduction);
+  });
+}
+
+function renderScriptReview(script) {
   const scenes = script.scenes
     .map(
       (scene) => `
-        <div class="scene">
-          <strong>${scene.scene_number}. ${escapeHtml(scene.setting)} · ${escapeHtml(scene.time)}</strong>
+        <article class="scene">
+          <div class="scene-head">
+            <strong>${scene.scene_number}. ${escapeHtml(scene.setting)}</strong>
+            <span>${escapeHtml(scene.time)}</span>
+          </div>
           <p>${escapeHtml(scene.summary)}</p>
+          <div class="dialogue-list">
+            ${scene.dialogue.map(renderDialogueLine).join("")}
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+  const outline = script.episode_outline
+    .map(
+      (beat, index) => `
+        <div class="outline-item">
+          <span>${index + 1}</span>
+          <div>
+            <strong>${escapeHtml(beat.beat)}</strong>
+            <p>${escapeHtml(beat.purpose)}</p>
+          </div>
         </div>
       `,
     )
@@ -309,8 +364,133 @@ function renderScript() {
         <div class="kv-key">Logline</div>
         <div class="kv-value">${escapeHtml(script.logline)}</div>
       </div>
+      <div class="kv-row">
+        <div class="kv-key">Format</div>
+        <div class="kv-value">
+          ${escapeHtml(script.genre)} · ${escapeHtml(script.runtime_minutes)} min · ${escapeHtml(script.content_rating)}
+        </div>
+      </div>
     </div>
-    ${scenes}
+    <div class="tag-list">${script.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>
+    <div class="review-section">
+      <h3>Episode Beats</h3>
+      <div class="outline-list">${outline}</div>
+    </div>
+    <div class="review-section">
+      <h3>Scenes & Dialogue</h3>
+      ${scenes}
+    </div>
+  `;
+}
+
+function renderCharacterReview(script) {
+  const characters = script.characters
+    .map(
+      (character) => `
+        <article class="character-card">
+          <div class="character-head">
+            <strong>${escapeHtml(character.name)}</strong>
+            <span>${escapeHtml(character.age)} · ${escapeHtml(character.role)}</span>
+          </div>
+          <dl>
+            <dt>Desire</dt>
+            <dd>${escapeHtml(character.desire)}</dd>
+            <dt>Secret</dt>
+            <dd>${escapeHtml(character.secret)}</dd>
+            <dt>Voice</dt>
+            <dd>${escapeHtml(character.voice)}</dd>
+          </dl>
+        </article>
+      `,
+    )
+    .join("");
+  const engine = script.story_engine;
+  el.scriptPreview.innerHTML = `
+    <div class="review-section">
+      <h3>Characters</h3>
+      <div class="character-grid">${characters}</div>
+    </div>
+    <div class="review-section">
+      <h3>Story Engine</h3>
+      <div class="engine-grid">
+        ${renderEngineItem("Hook", engine.hook)}
+        ${renderEngineItem("Conflict", engine.conflict)}
+        ${renderEngineItem("Turn", engine.turning_point)}
+        ${renderEngineItem("Climax", engine.climax)}
+        ${renderEngineItem("Ending", engine.ending)}
+      </div>
+    </div>
+  `;
+}
+
+function renderProductionReview(script, production) {
+  const notes = script.production_notes;
+  const shotPlan = production.shot_plan
+    .map(
+      (shot) => `
+        <article class="shot-card">
+          <strong>${escapeHtml(shot.shot)}</strong>
+          <span>${escapeHtml(shot.duration_seconds)}s</span>
+          <p>${escapeHtml(shot.purpose)}</p>
+        </article>
+      `,
+    )
+    .join("");
+  el.scriptPreview.innerHTML = `
+    <div class="review-section">
+      <h3>Production Pack</h3>
+      <div class="kv">
+        <div class="kv-row">
+          <div class="kv-key">Visual Style</div>
+          <div class="kv-value">${escapeHtml(production.visual_style)}</div>
+        </div>
+        <div class="kv-row">
+          <div class="kv-key">Shooting Style</div>
+          <div class="kv-value">${escapeHtml(notes.shooting_style)}</div>
+        </div>
+      </div>
+    </div>
+    <div class="review-section">
+      <h3>Checklist</h3>
+      ${renderChecklist("Locations", production.locations)}
+      ${renderChecklist("Props", production.props)}
+      ${renderChecklist("Edit Notes", production.edit_notes)}
+      ${renderChecklist("Risk Flags", notes.risk_flags)}
+    </div>
+    <div class="review-section">
+      <h3>Shot Plan</h3>
+      <div class="shot-list">${shotPlan}</div>
+    </div>
+  `;
+}
+
+function renderDialogueLine(line) {
+  return `
+    <div class="dialogue-line">
+      <strong>${escapeHtml(line.speaker)}</strong>
+      <p>${escapeHtml(line.line)}</p>
+      <span>${escapeHtml(line.direction)}</span>
+    </div>
+  `;
+}
+
+function renderEngineItem(label, value) {
+  return `
+    <div class="engine-item">
+      <span>${escapeHtml(label)}</span>
+      <p>${escapeHtml(value)}</p>
+    </div>
+  `;
+}
+
+function renderChecklist(label, items) {
+  return `
+    <div class="checklist">
+      <strong>${escapeHtml(label)}</strong>
+      <ul>
+        ${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    </div>
   `;
 }
 
