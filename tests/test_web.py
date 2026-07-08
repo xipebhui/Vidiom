@@ -14,6 +14,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     app_js = (STATIC_DIR / "app.js").read_text()
 
     assert 'id="exportProject"' in index_html
+    assert 'id="duplicateProject"' in index_html
     assert 'id="projectSearch"' in index_html
     assert 'id="projectStatusFilter"' in index_html
     assert 'name="duration_minutes"' in index_html
@@ -26,6 +27,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function projectListQuery" in app_js
     assert "function applyProjectFilters" in app_js
     assert "async function downloadProjectExport" in app_js
+    assert "async function duplicateProject" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
 
@@ -291,6 +293,57 @@ def test_export_project_api_rejects_draft_project(tmp_path) -> None:
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Project is not ready to export."
+
+
+def test_duplicate_project_api_creates_editable_draft_copy(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(
+        storage,
+        "一个剪辑师发现素材里藏着未来事故。",
+        {
+            "duration_minutes": 5,
+            "aspect_ratio": "9:16 vertical",
+            "tone": "强钩子",
+        },
+    )
+    storage.complete_canvas_node(project_id, "script", valid_payload())
+    storage.update_project_title(project_id, "倒计时素材")
+    storage.update_project_status(project_id, "completed")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.post(f"/api/projects/{project_id}/duplicate")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    project = response.json()["project"]
+    assert project["id"] != project_id
+    assert project["status"] == "draft"
+    assert project["title"] == "倒计时素材 Copy"
+    assert project["seed_text"] == "一个剪辑师发现素材里藏着未来事故。"
+    assert project["brief"]["aspect_ratio"] == "9:16 vertical"
+    assert project["nodes"][0]["key"] == "seed"
+    assert project["nodes"][0]["output"]["brief"]["tone"] == "强钩子"
+    assert [node["status"] for node in project["nodes"][1:]] == ["pending"] * 5
 
 
 def production_output() -> dict:

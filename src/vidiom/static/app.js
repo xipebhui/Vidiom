@@ -17,6 +17,7 @@ const el = {
   createProject: document.querySelector("#createProject"),
   refreshProjects: document.querySelector("#refreshProjects"),
   exportProject: document.querySelector("#exportProject"),
+  duplicateProject: document.querySelector("#duplicateProject"),
   runProject: document.querySelector("#runProject"),
   projectSearch: document.querySelector("#projectSearch"),
   projectStatusFilter: document.querySelector("#projectStatusFilter"),
@@ -36,6 +37,7 @@ const el = {
 el.createProject.addEventListener("click", createProject);
 el.refreshProjects.addEventListener("click", loadProjects);
 el.exportProject.addEventListener("click", downloadProjectExport);
+el.duplicateProject.addEventListener("click", duplicateProject);
 el.runProject.addEventListener("click", runProject);
 el.projectSearch.addEventListener("input", applyProjectFilters);
 el.projectStatusFilter.addEventListener("change", applyProjectFilters);
@@ -233,6 +235,25 @@ async function downloadProjectExport() {
   }
 }
 
+async function duplicateProject() {
+  if (!state.project) return;
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}/duplicate`, { method: "POST" });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.selectedKey = "seed";
+    resetProjectFilters();
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 function render() {
   renderHeader();
   renderProjects();
@@ -246,6 +267,7 @@ function renderHeader() {
   const project = state.project;
   el.runProject.disabled = !project || state.running || project.status === "running";
   el.exportProject.disabled = !project || state.running || !projectCanExport(project);
+  el.duplicateProject.disabled = !project || state.running;
   el.canvasTitle.textContent = project?.title || "Untitled";
   el.canvasMeta.textContent = project ? `#${project.id} · ${project.status}` : "";
   el.projectStatus.textContent = project ? project.status : "Ready";
@@ -679,6 +701,7 @@ function setBusy(isBusy) {
   el.createProject.disabled = isBusy;
   el.refreshProjects.disabled = isBusy;
   el.exportProject.disabled = isBusy || !state.project || !projectCanExport(state.project);
+  el.duplicateProject.disabled = isBusy || !state.project;
   renderHeader();
 }
 

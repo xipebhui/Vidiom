@@ -123,6 +123,27 @@ def export_project(project_id: int, storage: Annotated[Storage, Depends(get_stor
     )
 
 
+@app.post("/api/projects/{project_id}/duplicate")
+def duplicate_project(
+    project_id: int,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        source = storage.get_project(project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    duplicate_id = create_canvas_project(
+        storage=storage,
+        seed_text=str(source["seed_text"]),
+        brief=source["brief"],
+    )
+    duplicate_title = _duplicate_title(source["title"])
+    if duplicate_title is not None:
+        storage.update_project_title(duplicate_id, duplicate_title)
+    return _project_response(storage, duplicate_id)
+
+
 @app.patch("/api/projects/{project_id}")
 def update_project(
     project_id: int,
@@ -193,3 +214,13 @@ def _export_filename(payload: dict) -> str:
         for character in raw_title.strip()
     ).strip("-")
     return f"vidiom-{safe_title}.json"
+
+
+def _duplicate_title(title: str | None) -> str | None:
+    if title is None:
+        return None
+    clean_title = title.strip()
+    if not clean_title:
+        return None
+    suffix = " Copy"
+    return f"{clean_title[: 120 - len(suffix)]}{suffix}"
