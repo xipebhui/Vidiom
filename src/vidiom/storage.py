@@ -621,6 +621,30 @@ class Storage:
                 (now, project_id),
             )
 
+    def pause_running_project(self, project_id: int) -> None:
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, status
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            if project["status"] != "running":
+                raise RuntimeError("Only running projects can be paused.")
+
+            conn.execute(
+                """
+                UPDATE projects
+                SET status = 'paused', last_error = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (utc_now(), project_id),
+            )
+
     def update_canvas_node_status(
         self, project_id: int, node_key: str, status: str, error: str | None
     ) -> None:

@@ -17,9 +17,11 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert 'id="exportProject"' in index_html
     assert 'id="duplicateProject"' in index_html
     assert 'id="resetProject"' in index_html
+    assert 'id="pauseProject"' in index_html
     assert 'id="runProgress"' in index_html
     assert 'id="projectSearch"' in index_html
     assert 'id="projectStatusFilter"' in index_html
+    assert '<option value="paused">Paused</option>' in index_html
     assert 'name="duration_minutes"' in index_html
     assert 'name="aspect_ratio"' in index_html
     assert 'data-review-tab="script"' in index_html
@@ -34,6 +36,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderRunProgress" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "async function duplicateProject" in app_js
+    assert "async function pauseProject" in app_js
     assert "async function reviseProjectFromNode" in app_js
     assert "async function resetProject" in app_js
     assert "function renderRevisionAction" in app_js
@@ -332,6 +335,46 @@ def test_run_project_api_starts_observable_background_run(tmp_path, monkeypatch)
     assert body["progress"]["total"] == 5
     assert duplicate_response.status_code == 400
     assert duplicate_response.json()["detail"] == "Project is already running."
+
+
+def test_pause_project_api_marks_running_project_and_blocks_early_resume(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.update_project_status(project_id, "running")
+    storage.update_canvas_node_status(project_id, "premise", "running", None)
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.post(f"/api/projects/{project_id}/pause")
+        resume_response = client.post(f"/api/projects/{project_id}/run")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project"]["status"] == "paused"
+    assert body["progress"]["active_key"] == "premise"
+    assert body["progress"]["active_title"] == "Premise Agent"
+    assert resume_response.status_code == 400
+    assert resume_response.json()["detail"] == "Project is still pausing after the active node."
 
 
 def test_reset_project_api_turns_failed_project_back_into_editable_draft(tmp_path) -> None:

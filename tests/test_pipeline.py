@@ -116,6 +116,19 @@ class FakeCanvasAgent:
         }
 
 
+class PausingCanvasAgent(FakeCanvasAgent):
+    def __init__(self, storage: Storage, project_id: int) -> None:
+        super().__init__()
+        self.storage = storage
+        self.project_id = project_id
+
+    def generate_step(self, step: CanvasAgentStep, seed_text: str, context: dict) -> dict:
+        output = super().generate_step(step, seed_text, context)
+        if step.key == "premise":
+            self.storage.pause_running_project(self.project_id)
+        return output
+
+
 def test_run_canvas_project_persists_review_outputs(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "vidiom.sqlite3")
     storage.migrate()
@@ -139,3 +152,32 @@ def test_run_canvas_project_persists_review_outputs(tmp_path: Path) -> None:
     assert agent.contexts[0][1]["creative_brief"]["duration_minutes"] == 5
     assert nodes["script"]["output"]["scenes"][0]["dialogue"][0]["speaker"] == "林澈"
     assert nodes["production"]["output"]["shot_plan"][0]["shot"] == "屏幕特写"
+
+
+def test_run_canvas_project_pauses_after_current_node_and_resumes(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "vidiom.sqlite3")
+    storage.migrate()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    pausing_agent = PausingCanvasAgent(storage, project_id)
+
+    paused_project = run_canvas_project(storage, project_id, pausing_agent)
+
+    paused_nodes = {node["key"]: node for node in paused_project["nodes"]}
+    assert paused_project["status"] == "paused"
+    assert [key for key, _ in pausing_agent.contexts] == ["premise"]
+    assert paused_nodes["premise"]["status"] == "completed"
+    assert paused_nodes["characters"]["status"] == "pending"
+
+    resume_agent = FakeCanvasAgent()
+    completed_project = run_canvas_project(storage, project_id, resume_agent)
+
+    completed_nodes = {node["key"]: node for node in completed_project["nodes"]}
+    assert completed_project["status"] == "completed"
+    assert [key for key, _ in resume_agent.contexts] == [
+        "characters",
+        "beats",
+        "script",
+        "production",
+    ]
+    assert resume_agent.contexts[0][1]["premise"]["genre"] == "悬疑亲情"
+    assert completed_nodes["production"]["output"]["shot_plan"][0]["shot"] == "屏幕特写"

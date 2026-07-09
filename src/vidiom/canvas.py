@@ -201,6 +201,9 @@ def run_canvas_project(storage: Storage, project_id: int, agent: CanvasAgent) ->
                 context[node["key"]] = node["output"]
 
         for step in AGENT_STEPS:
+            if _project_is_paused(storage, project_id):
+                return storage.get_project(project_id)
+
             current = storage.get_canvas_node(project_id, step.key)
             if current["status"] == "completed" and current["output"] is not None:
                 context[step.key] = current["output"]
@@ -214,6 +217,9 @@ def run_canvas_project(storage: Storage, project_id: int, agent: CanvasAgent) ->
             if step.key == "script":
                 storage.complete(project["inspiration_id"], output)
                 storage.update_project_title(project_id, str(output["title"]))
+
+            if _project_is_paused(storage, project_id):
+                return storage.get_project(project_id)
 
         storage.update_project_status(project_id, "completed")
     except Exception as exc:
@@ -235,3 +241,7 @@ def _active_step_key(nodes: list[dict[str, Any]]) -> str | None:
         if node["status"] == "running":
             return str(node["key"])
     return None
+
+
+def _project_is_paused(storage: Storage, project_id: int) -> bool:
+    return storage.get_project(project_id)["status"] == "paused"

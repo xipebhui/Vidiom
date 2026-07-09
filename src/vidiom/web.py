@@ -51,7 +51,7 @@ class RunProjectResponse(BaseModel):
     progress: dict
 
 
-ProjectStatusFilter = Literal["draft", "running", "completed", "failed"]
+ProjectStatusFilter = Literal["draft", "running", "paused", "completed", "failed"]
 RevisionStartNode = Literal["premise", "characters", "beats", "script", "production"]
 
 
@@ -189,6 +189,20 @@ def reset_project(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/projects/{project_id}/pause")
+def pause_project(
+    project_id: int,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storage.pause_running_project(project_id)
+        return _project_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.patch("/api/projects/{project_id}")
 def update_project(
     project_id: int,
@@ -222,6 +236,8 @@ def run_project(
         project = storage.get_project(project_id)
         if project["status"] == "running":
             raise RuntimeError("Project is already running.")
+        if project["status"] == "paused" and _project_progress(project)["active_key"] is not None:
+            raise RuntimeError("Project is still pausing after the active node.")
         storage.update_project_status(project_id, "running")
         background_tasks.add_task(
             _run_project_job,

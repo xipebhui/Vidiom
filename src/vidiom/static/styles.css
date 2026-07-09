@@ -434,6 +434,11 @@ textarea:focus {
   color: var(--blue);
 }
 
+.status-paused {
+  background: rgba(81, 96, 101, 0.12);
+  color: #516065;
+}
+
 .status-failed {
   background: rgba(189, 79, 69, 0.12);
   color: var(--coral);

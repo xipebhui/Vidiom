@@ -30,6 +30,9 @@
           <button id="resetProject" class="icon-button" title="重置失败运行" disabled>
             <span aria-hidden="true">↺</span>
           </button>
+          <button id="pauseProject" class="icon-button" title="暂停运行" disabled>
+            <span aria-hidden="true">Ⅱ</span>
+          </button>
           <button id="runProject" class="primary-button" disabled>运行 Agent</button>
         </div>
       </header>
@@ -82,6 +85,7 @@
                 <option value="">全部状态</option>
                 <option value="draft">Draft</option>
                 <option value="running">Running</option>
+                <option value="paused">Paused</option>
                 <option value="completed">Completed</option>
                 <option value="failed">Failed</option>
               </select>
