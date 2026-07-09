@@ -129,6 +129,45 @@ class StoryboardShotReviewRequest(BaseModel):
     reviews: list[StoryboardShotReviewItem] = Field(min_length=1, max_length=100)
 
 
+class StoryboardShotUpdateRequest(BaseModel):
+    beat_ref: str | None = Field(default=None, min_length=1, max_length=200)
+    scene_ref: str | None = Field(default=None, min_length=1, max_length=200)
+    characters: list[str] | None = Field(default=None, max_length=40)
+    scene: str | None = Field(default=None, min_length=1, max_length=200)
+    props: list[str] | None = Field(default=None, max_length=40)
+    visual_description: str | None = Field(default=None, min_length=1, max_length=1200)
+    action_focus: str | None = Field(default=None, min_length=1, max_length=800)
+    dialogue_or_sound: str | None = Field(default=None, min_length=1, max_length=800)
+    duration_seconds: int | None = Field(default=None, ge=1, le=120)
+    aspect_ratio: str | None = Field(default=None, min_length=1, max_length=80)
+    visual_style: str | None = Field(default=None, min_length=1, max_length=500)
+    image_prompt: str | None = Field(default=None, min_length=1, max_length=2000)
+    review_status: StoryboardReviewStatus | None = None
+    prompt_ready: bool | None = None
+
+
+class StoryboardShotCreateRequest(BaseModel):
+    beat_ref: str = Field(min_length=1, max_length=200)
+    scene_ref: str = Field(min_length=1, max_length=200)
+    characters: list[str] = Field(default_factory=list, max_length=40)
+    scene: str = Field(min_length=1, max_length=200)
+    props: list[str] = Field(default_factory=list, max_length=40)
+    visual_description: str = Field(min_length=1, max_length=1200)
+    action_focus: str = Field(min_length=1, max_length=800)
+    dialogue_or_sound: str = Field(min_length=1, max_length=800)
+    duration_seconds: int = Field(ge=1, le=120)
+    aspect_ratio: str = Field(min_length=1, max_length=80)
+    visual_style: str = Field(min_length=1, max_length=500)
+    image_prompt: str = Field(min_length=1, max_length=2000)
+    review_status: StoryboardReviewStatus = "pending"
+    prompt_ready: bool = False
+    sequence_index: int | None = Field(default=None, ge=1)
+
+
+class StoryboardShotReorderRequest(BaseModel):
+    shot_ids: list[int] = Field(min_length=1, max_length=300)
+
+
 class StoryboardGenerateResponse(BaseModel):
     storyboard: dict
 
@@ -474,6 +513,76 @@ def update_storyboard_shot_reviews(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/projects/{project_id}/storyboard/shots/{shot_id}")
+def update_storyboard_shot(
+    project_id: int,
+    shot_id: int,
+    request: StoryboardShotUpdateRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storyboard = storage.update_storyboard_shot(
+            project_id,
+            shot_id,
+            request.model_dump(exclude_unset=True),
+        )
+        return {"storyboard": storyboard}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/storyboard/shots")
+def create_storyboard_shot(
+    project_id: int,
+    request: StoryboardShotCreateRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    payload = request.model_dump(exclude={"sequence_index"})
+    try:
+        storyboard = storage.create_storyboard_shot(
+            project_id,
+            payload,
+            sequence_index=request.sequence_index,
+        )
+        return {"storyboard": storyboard}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/projects/{project_id}/storyboard/shots/{shot_id}")
+def delete_storyboard_shot(
+    project_id: int,
+    shot_id: int,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storyboard = storage.delete_storyboard_shot(project_id, shot_id)
+        return {"storyboard": storyboard}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/storyboard/shots/reorder")
+def reorder_storyboard_shots(
+    project_id: int,
+    request: StoryboardShotReorderRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storyboard = storage.reorder_storyboard_shots(project_id, request.shot_ids)
+        return {"storyboard": storyboard}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

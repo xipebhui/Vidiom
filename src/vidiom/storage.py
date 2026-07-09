@@ -16,6 +16,28 @@ from .storyboard_schema import (
     STORYBOARD_STATUSES,
 )
 
+STORYBOARD_SHOT_EDITABLE_FIELDS = {
+    "beat_ref",
+    "scene_ref",
+    "characters",
+    "scene",
+    "props",
+    "visual_description",
+    "action_focus",
+    "dialogue_or_sound",
+    "duration_seconds",
+    "aspect_ratio",
+    "visual_style",
+    "image_prompt",
+    "review_status",
+    "prompt_ready",
+}
+
+STORYBOARD_SHOT_PRODUCTION_FIELDS = STORYBOARD_SHOT_EDITABLE_FIELDS - {
+    "review_status",
+    "prompt_ready",
+}
+
 
 @dataclass(frozen=True)
 class Inspiration:
@@ -1060,6 +1082,217 @@ class Storage:
             else None,
         }
 
+    def update_storyboard_shot(
+        self,
+        project_id: int,
+        shot_id: int,
+        fields: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        clean_fields = _clean_storyboard_shot_update(fields)
+        if not clean_fields:
+            raise ValueError("Provide at least one storyboard shot field.")
+        now = utc_now()
+        with self.connect() as conn:
+            storyboard = _completed_storyboard_row(conn, project_id)
+            shot = _project_storyboard_shot(conn, project_id, shot_id)
+            if shot is None:
+                raise LookupError(
+                    f"Storyboard shot {shot_id} was not found in project {project_id}."
+                )
+            prompt_affecting = any(
+                field in STORYBOARD_SHOT_PRODUCTION_FIELDS for field in clean_fields
+            )
+            next_prompt_ready = clean_fields.get("prompt_ready")
+            if prompt_affecting:
+                clean_fields["prompt_ready"] = False
+            elif next_prompt_ready and not str(
+                clean_fields.get("image_prompt", shot["image_prompt"])
+            ).strip():
+                raise ValueError("Prompt ready requires a non-empty image prompt.")
+
+            assignments: list[str] = []
+            params: list[Any] = []
+            for field in sorted(clean_fields):
+                column, value = _storyboard_shot_column_value(field, clean_fields[field])
+                assignments.append(f"{column} = ?")
+                params.append(value)
+            assignments.append("updated_at = ?")
+            params.append(now)
+            params.append(shot_id)
+            conn.execute(
+                f"""
+                UPDATE storyboard_shots
+                SET {", ".join(assignments)}
+                WHERE id = ?
+                """,
+                params,
+            )
+            _touch_storyboard_project(conn, project_id, int(storyboard["id"]), now)
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_edit",
+                title="Storyboard shot updated",
+                status="completed",
+                description=f"Updated storyboard shot #{shot['sequence_index']}.",
+                details={
+                    "storyboard_id": int(storyboard["id"]),
+                    "shot_id": shot_id,
+                    "sequence_index": shot["sequence_index"],
+                    "fields": sorted(clean_fields),
+                    "prompt_ready_reset": prompt_affecting,
+                },
+                created_at=now,
+            )
+        return self.get_project_storyboard(project_id)
+
+    def create_storyboard_shot(
+        self,
+        project_id: int,
+        fields: dict[str, Any],
+        *,
+        sequence_index: int | None = None,
+    ) -> dict[str, Any] | None:
+        clean_fields = _clean_storyboard_shot_create(fields)
+        now = utc_now()
+        with self.connect() as conn:
+            storyboard = _completed_storyboard_row(conn, project_id)
+            current_rows = _storyboard_shot_order_rows(conn, int(storyboard["id"]))
+            insert_position = len(current_rows) + 1 if sequence_index is None else sequence_index
+            if insert_position < 1 or insert_position > len(current_rows) + 1:
+                raise ValueError("Storyboard shot insert position is out of range.")
+            cursor = conn.execute(
+                """
+                INSERT INTO storyboard_shots(
+                    storyboard_id, sequence_index, review_status, beat_ref, scene_ref,
+                    characters_json, scene, props_json, visual_description, action_focus,
+                    dialogue_or_sound, duration_seconds, aspect_ratio, visual_style,
+                    image_prompt, prompt_ready, created_at, updated_at
+                )
+                VALUES (?, -1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    int(storyboard["id"]),
+                    clean_fields["review_status"],
+                    clean_fields["beat_ref"],
+                    clean_fields["scene_ref"],
+                    _json_or_none({"items": clean_fields["characters"]}),
+                    clean_fields["scene"],
+                    _json_or_none({"items": clean_fields["props"]}),
+                    clean_fields["visual_description"],
+                    clean_fields["action_focus"],
+                    clean_fields["dialogue_or_sound"],
+                    clean_fields["duration_seconds"],
+                    clean_fields["aspect_ratio"],
+                    clean_fields["visual_style"],
+                    clean_fields["image_prompt"],
+                    now,
+                    now,
+                ),
+            )
+            new_shot_id = int(cursor.lastrowid)
+            ordered_ids = [int(row["id"]) for row in current_rows]
+            ordered_ids.insert(insert_position - 1, new_shot_id)
+            _safe_resequence_storyboard_shots(conn, ordered_ids, now, reset_prompt_ready=True)
+            _touch_storyboard_project(conn, project_id, int(storyboard["id"]), now)
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_edit",
+                title="Storyboard shot created",
+                status="completed",
+                description=f"Inserted storyboard shot at position {insert_position}.",
+                details={
+                    "storyboard_id": int(storyboard["id"]),
+                    "shot_id": new_shot_id,
+                    "sequence_index": insert_position,
+                    "prompt_ready_reset": True,
+                },
+                created_at=now,
+            )
+        return self.get_project_storyboard(project_id)
+
+    def delete_storyboard_shot(
+        self,
+        project_id: int,
+        shot_id: int,
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as conn:
+            storyboard = _completed_storyboard_row(conn, project_id)
+            shot = _project_storyboard_shot(conn, project_id, shot_id)
+            if shot is None:
+                raise LookupError(
+                    f"Storyboard shot {shot_id} was not found in project {project_id}."
+                )
+            current_rows = _storyboard_shot_order_rows(conn, int(storyboard["id"]))
+            if len(current_rows) <= 1:
+                raise ValueError("Cannot delete the final storyboard shot.")
+            conn.execute("DELETE FROM storyboard_shot_assets WHERE shot_id = ?", (shot_id,))
+            conn.execute("DELETE FROM storyboard_shot_image_assets WHERE shot_id = ?", (shot_id,))
+            conn.execute("DELETE FROM storyboard_shots WHERE id = ?", (shot_id,))
+            remaining_ids = [
+                int(row["id"])
+                for row in _storyboard_shot_order_rows(conn, int(storyboard["id"]))
+            ]
+            if remaining_ids:
+                _safe_resequence_storyboard_shots(conn, remaining_ids, now, reset_prompt_ready=True)
+            _touch_storyboard_project(conn, project_id, int(storyboard["id"]), now)
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_edit",
+                title="Storyboard shot deleted",
+                status="completed",
+                description=f"Deleted storyboard shot #{shot['sequence_index']}.",
+                details={
+                    "storyboard_id": int(storyboard["id"]),
+                    "shot_id": shot_id,
+                    "sequence_index": shot["sequence_index"],
+                    "remaining_shot_count": len(remaining_ids),
+                    "prompt_ready_reset": bool(remaining_ids),
+                },
+                created_at=now,
+            )
+        return self.get_project_storyboard(project_id)
+
+    def reorder_storyboard_shots(
+        self,
+        project_id: int,
+        shot_ids: Iterable[int],
+    ) -> dict[str, Any] | None:
+        ordered_ids = [int(shot_id) for shot_id in shot_ids]
+        if not ordered_ids:
+            raise ValueError("Provide at least one storyboard shot id.")
+        if len(set(ordered_ids)) != len(ordered_ids):
+            raise ValueError("Storyboard shot reorder contains duplicate shot ids.")
+        now = utc_now()
+        with self.connect() as conn:
+            storyboard = _completed_storyboard_row(conn, project_id)
+            current_ids = [
+                int(row["id"])
+                for row in _storyboard_shot_order_rows(conn, int(storyboard["id"]))
+            ]
+            if set(ordered_ids) != set(current_ids):
+                raise ValueError("Storyboard shot reorder must include every current shot.")
+            _safe_resequence_storyboard_shots(conn, ordered_ids, now, reset_prompt_ready=True)
+            _touch_storyboard_project(conn, project_id, int(storyboard["id"]), now)
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_edit",
+                title="Storyboard shots reordered",
+                status="completed",
+                description=f"Reordered {len(ordered_ids)} storyboard shots.",
+                details={
+                    "storyboard_id": int(storyboard["id"]),
+                    "shot_ids": ordered_ids,
+                    "prompt_ready_reset": True,
+                },
+                created_at=now,
+            )
+        return self.get_project_storyboard(project_id)
+
     def link_storyboard_shot_image_asset(
         self,
         project_id: int,
@@ -2068,6 +2301,71 @@ def _storyboard_image_link_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _clean_storyboard_shot_update(fields: dict[str, Any]) -> dict[str, Any]:
+    unknown = sorted(set(fields) - STORYBOARD_SHOT_EDITABLE_FIELDS)
+    if unknown:
+        raise ValueError(f"Unsupported storyboard shot fields: {unknown}")
+    return {
+        field: _clean_storyboard_shot_field(field, value)
+        for field, value in fields.items()
+        if value is not None
+    }
+
+
+def _clean_storyboard_shot_create(fields: dict[str, Any]) -> dict[str, Any]:
+    required = STORYBOARD_SHOT_EDITABLE_FIELDS - {"prompt_ready"}
+    missing = sorted(required - set(fields))
+    if missing:
+        raise ValueError(f"Storyboard shot is missing required fields: {missing}")
+    clean = _clean_storyboard_shot_update(fields)
+    clean["prompt_ready"] = False
+    return clean
+
+
+def _clean_storyboard_shot_field(field: str, value: Any) -> Any:
+    if field in {
+        "beat_ref",
+        "scene_ref",
+        "scene",
+        "visual_description",
+        "action_focus",
+        "dialogue_or_sound",
+        "aspect_ratio",
+        "visual_style",
+        "image_prompt",
+    }:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Storyboard shot {field} cannot be empty.")
+        return value.strip()
+    if field in {"characters", "props"}:
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"Storyboard shot {field} must be a string list.")
+        return [item.strip() for item in value if item.strip()]
+    if field == "duration_seconds":
+        if not isinstance(value, int) or value < 1 or value > 120:
+            raise ValueError("Storyboard shot duration must be 1-120 seconds.")
+        return value
+    if field == "review_status":
+        if value not in STORYBOARD_REVIEW_STATUSES:
+            raise ValueError(f"Unsupported storyboard review status: {value}")
+        return value
+    if field == "prompt_ready":
+        if not isinstance(value, bool):
+            raise ValueError("Storyboard shot prompt_ready must be a boolean.")
+        return value
+    raise ValueError(f"Unsupported storyboard shot field: {field}")
+
+
+def _storyboard_shot_column_value(field: str, value: Any) -> tuple[str, Any]:
+    if field == "characters":
+        return "characters_json", _json_or_none({"items": value})
+    if field == "props":
+        return "props_json", _json_or_none({"items": value})
+    if field == "prompt_ready":
+        return "prompt_ready", 1 if value else 0
+    return field, value
+
+
 def _storyboard_source_row(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
     project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     script = conn.execute(
@@ -2162,6 +2460,46 @@ def _ensure_storyboard_row(
     return row
 
 
+def _completed_storyboard_row(conn: sqlite3.Connection, project_id: int) -> sqlite3.Row:
+    project = conn.execute(
+        """
+        SELECT id, status
+        FROM projects
+        WHERE id = ?
+        """,
+        (project_id,),
+    ).fetchone()
+    if project is None:
+        raise LookupError(f"Project {project_id} was not found.")
+    if project["status"] != "completed":
+        raise RuntimeError("Storyboard shot editing requires a completed project.")
+    row = conn.execute(
+        """
+        SELECT
+            id, project_id, status, model, generation_status, generation_started_at,
+            generation_finished_at, generation_error_message, last_completed_at,
+            last_completed_model, source_script_updated_at,
+            source_production_updated_at, error_message, created_at, updated_at
+        FROM storyboards
+        WHERE project_id = ?
+        """,
+        (project_id,),
+    ).fetchone()
+    if row is None or row["last_completed_at"] is None:
+        raise RuntimeError("Storyboard shot editing requires a completed storyboard.")
+    shot_count = conn.execute(
+        """
+        SELECT COUNT(*) AS shot_count
+        FROM storyboard_shots
+        WHERE storyboard_id = ?
+        """,
+        (row["id"],),
+    ).fetchone()
+    if shot_count is None or int(shot_count["shot_count"]) == 0:
+        raise RuntimeError("Storyboard shot editing requires completed storyboard shots.")
+    return row
+
+
 def _project_storyboard_shot(
     conn: sqlite3.Connection,
     project_id: int,
@@ -2169,13 +2507,82 @@ def _project_storyboard_shot(
 ) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT s.id, s.sequence_index
+        SELECT s.id, s.sequence_index, s.image_prompt
         FROM storyboard_shots s
         JOIN storyboards sb ON sb.id = s.storyboard_id
         WHERE s.id = ? AND sb.project_id = ?
         """,
         (shot_id, project_id),
     ).fetchone()
+
+
+def _storyboard_shot_order_rows(
+    conn: sqlite3.Connection,
+    storyboard_id: int,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT id, sequence_index
+        FROM storyboard_shots
+        WHERE storyboard_id = ?
+        ORDER BY sequence_index, id
+        """,
+        (storyboard_id,),
+    ).fetchall()
+
+
+def _safe_resequence_storyboard_shots(
+    conn: sqlite3.Connection,
+    shot_ids: list[int],
+    now: str,
+    *,
+    reset_prompt_ready: bool,
+) -> None:
+    temp_offset = len(shot_ids)
+    for offset, shot_id in enumerate(shot_ids, start=1):
+        conn.execute(
+            """
+            UPDATE storyboard_shots
+            SET sequence_index = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (-(temp_offset + offset), now, shot_id),
+        )
+    for sequence_index, shot_id in enumerate(shot_ids, start=1):
+        conn.execute(
+            """
+            UPDATE storyboard_shots
+            SET sequence_index = ?,
+                prompt_ready = CASE WHEN ? THEN 0 ELSE prompt_ready END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (sequence_index, 1 if reset_prompt_ready else 0, now, shot_id),
+        )
+
+
+def _touch_storyboard_project(
+    conn: sqlite3.Connection,
+    project_id: int,
+    storyboard_id: int,
+    now: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE storyboards
+        SET updated_at = ?
+        WHERE id = ?
+        """,
+        (now, storyboard_id),
+    )
+    conn.execute(
+        """
+        UPDATE projects
+        SET updated_at = ?
+        WHERE id = ?
+        """,
+        (now, project_id),
+    )
 
 
 def _storyboard_status_title(status: str) -> str:

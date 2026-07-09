@@ -133,6 +133,16 @@ vidiom scheduler
 
 ## 迭代记录
 
+### 2026-07-10 06:51 CST - 建立 Storyboard shot 编辑事务与 API 边界
+
+- 对应需求文档条目：`docs/next-product-requirement.md` 的 “Storyboard Editing and Asset Review Workspace”，本轮落实 Shot 编辑、新增、删除、排序保存与导出一致性的后端验收基础，服务后续 Storyboard 可编辑生产台与资产审阅闭环。
+- 对应架构师任务：`docs/development-task-breakdown.md` 的首要执行项 Task 1 “建立 Storyboard 编辑域模型、事务存储和 API 边界”，要求先改 Storage 事务和 Web API，不用整包 `replace_project_storyboard()` 保存人工编辑。
+- 本轮开发内容：新增 Storyboard shot 可编辑字段清洗与校验；Storage 新增更新单 shot、新增 shot、删除 shot、重排 shots 的事务方法；排序采用临时负序号区间规避 `UNIQUE(storyboard_id, sequence_index)` 中间态冲突；shot 内容编辑、新增、删除和排序会让受影响 shots 的 `prompt_ready=false`；删除 shot 会清理该 shot 的 asset relations 和 image links，并禁止删除最后一个 storyboard shot；每次编辑会更新 project/storyboard `updated_at` 并写入 `storyboard_edit` activity；Web 新增 `PATCH /api/projects/{project_id}/storyboard/shots/{shot_id}`、`POST /api/projects/{project_id}/storyboard/shots`、`DELETE /api/projects/{project_id}/storyboard/shots/{shot_id}`、`POST /api/projects/{project_id}/storyboard/shots/reorder`。
+- 用户价值：生成后的 Storyboard 不再只能展示或轻审阅；后续前端生产台可以通过持久化 API 保存人工修正、插入缺失镜头、删除无效镜头和调整镜头顺序，刷新与导出包都会读取同一份编辑后 Storyboard。
+- 涉及文件/模块：`src/vidiom/storage.py`、`src/vidiom/web.py`、`tests/test_storyboard.py`、`tests/test_web.py`、`README.md`。
+- 验证命令与结果：`.venv/bin/python -m pytest tests/test_storyboard.py tests/test_web.py` 通过，49 passed，1 个 StarletteDeprecationWarning 来自依赖；`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，77 passed，1 个 StarletteDeprecationWarning 来自依赖；`node --check src/vidiom/static/app.js` 通过；`git diff --check` 通过。
+- 仍待处理事项：本轮严格完成架构 Task 1，尚未实现 Task 2 readiness summary/blockers、Task 3 资产 CRUD 与 shot-asset 关系编辑、Task 4 项目图像关联审阅增强、Task 5 前端 Storyboard 可编辑生产台；下一轮应继续由产品/架构师评估这些剩余验收项，尤其是资产变化后的准备度派生与 UI 工作区。
+
 ### 2026-07-10 05:56 CST - 收口 Storyboard 中断状态并完成真实端到端验收
 
 - 对应需求文档条目：`docs/next-product-requirement.md` 的 “Complete Real Model End-to-End Acceptance”，要求真实 `gpt-5.5` agent、真实 `gpt-5.5` Storyboard、`gpt-image-2` 项目图像和导出包在同一轮真实 smoke 中全部 completed，并继续保证 failed、interrupted 和 incomplete 不被写成成功。

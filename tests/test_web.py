@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from test_schema import valid_payload
-from test_storyboard import completed_project_storage, valid_storyboard_payload
+from test_storyboard import (
+    completed_project_storage,
+    new_storyboard_shot_fields,
+    valid_storyboard_payload,
+)
 
 import vidiom.web as web_module
 from vidiom.canvas import create_canvas_project
@@ -1038,6 +1042,170 @@ def test_storyboard_review_and_image_link_api(tmp_path) -> None:
     assert link_response.json()["storyboard"]["image_links"][0]["image_asset"]["id"] == image_id
     assert unlink_response.status_code == 200
     assert unlink_response.json()["storyboard"]["image_links"] == []
+
+
+def test_storyboard_shot_editing_api_persists_refresh_and_export(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage, project_id = completed_project_storage(tmp_path)
+    db_path = storage.db_path
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    first_shot_id = storyboard["shots"][0]["id"]
+    second_shot_id = storyboard["shots"][1]["id"]
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        update_response = client.patch(
+            f"/api/projects/{project_id}/storyboard/shots/{first_shot_id}",
+            json={
+                "visual_description": "林澈把异常素材放大到街口车牌。",
+                "duration_seconds": 10,
+                "review_status": "approved",
+                "prompt_ready": True,
+            },
+        )
+        create_response = client.post(
+            f"/api/projects/{project_id}/storyboard/shots",
+            json={**new_storyboard_shot_fields(), "sequence_index": 2},
+        )
+        created_shot_id = create_response.json()["storyboard"]["shots"][1]["id"]
+        reorder_response = client.post(
+            f"/api/projects/{project_id}/storyboard/shots/reorder",
+            json={"shot_ids": [second_shot_id, created_shot_id, first_shot_id]},
+        )
+        delete_response = client.delete(
+            f"/api/projects/{project_id}/storyboard/shots/{first_shot_id}",
+        )
+        refreshed_response = client.get(f"/api/projects/{project_id}/storyboard")
+        export_response = client.get(f"/api/projects/{project_id}/export")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert update_response.status_code == 200
+    updated = update_response.json()["storyboard"]["shots"][0]
+    assert updated["visual_description"] == "林澈把异常素材放大到街口车牌。"
+    assert updated["prompt_ready"] is False
+    assert create_response.status_code == 200
+    assert [shot["sequence_index"] for shot in create_response.json()["storyboard"]["shots"]] == [
+        1,
+        2,
+        3,
+    ]
+    assert reorder_response.status_code == 200
+    assert [shot["id"] for shot in reorder_response.json()["storyboard"]["shots"]] == [
+        second_shot_id,
+        created_shot_id,
+        first_shot_id,
+    ]
+    assert delete_response.status_code == 200
+    assert [shot["sequence_index"] for shot in delete_response.json()["storyboard"]["shots"]] == [
+        1,
+        2,
+    ]
+    refreshed = refreshed_response.json()
+    assert first_shot_id not in [shot["id"] for shot in refreshed["shots"]]
+    exported = export_response.json()["deliverables"]["storyboard"]
+    assert [shot["sequence_index"] for shot in exported["shots"]] == [1, 2]
+    assert exported["shots"][1]["beat_ref"] == "追查地点"
+
+
+def test_storyboard_shot_editing_api_rejects_invalid_or_missing_storyboard(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage, project_id = completed_project_storage(tmp_path)
+    db_path = storage.db_path
+    draft_project_id = create_canvas_project(
+        storage,
+        "一个剪辑师发现素材里藏着未来事故。",
+    )
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    first_shot_id = storyboard["shots"][0]["id"]
+    second_shot_id = storyboard["shots"][1]["id"]
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        draft_response = client.post(
+            f"/api/projects/{draft_project_id}/storyboard/shots",
+            json=new_storyboard_shot_fields(),
+        )
+        missing_response = client.patch(
+            f"/api/projects/{project_id}/storyboard/shots/999999",
+            json={"review_status": "approved"},
+        )
+        invalid_response = client.post(
+            f"/api/projects/{project_id}/storyboard/shots/reorder",
+            json={"shot_ids": [first_shot_id]},
+        )
+        duplicate_response = client.post(
+            f"/api/projects/{project_id}/storyboard/shots/reorder",
+            json={"shot_ids": [first_shot_id, first_shot_id]},
+        )
+        valid_response = client.post(
+            f"/api/projects/{project_id}/storyboard/shots/reorder",
+            json={"shot_ids": [second_shot_id, first_shot_id]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert draft_response.status_code == 400
+    assert draft_response.json()["detail"] == (
+        "Storyboard shot editing requires a completed project."
+    )
+    assert missing_response.status_code == 404
+    assert "was not found" in missing_response.json()["detail"]
+    assert invalid_response.status_code == 400
+    assert invalid_response.json()["detail"] == (
+        "Storyboard shot reorder must include every current shot."
+    )
+    assert duplicate_response.status_code == 400
+    assert "duplicate" in duplicate_response.json()["detail"]
+    assert valid_response.status_code == 200
 
 
 def test_update_project_script_api_saves_completed_deliverable_edits(tmp_path) -> None:

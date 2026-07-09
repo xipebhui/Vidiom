@@ -346,6 +346,156 @@ def test_storyboard_image_link_delete_preserves_project_image_asset(
     assert project["image_assets"][0]["id"] == image_id
 
 
+def test_storyboard_shot_update_persists_and_resets_prompt_ready(
+    tmp_path: Path,
+) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    shot_id = storyboard["shots"][0]["id"]
+
+    refreshed = storage.update_storyboard_shot(
+        project_id,
+        shot_id,
+        {
+            "beat_ref": "异常素材放大",
+            "scene_ref": "剪辑室 深夜",
+            "characters": ["林澈", "周岚"],
+            "scene": "剪辑室工位",
+            "props": ["电脑", "硬盘"],
+            "visual_description": "林澈把异常素材放大到街口车牌。",
+            "action_focus": "他截取关键帧并确认时间码。",
+            "dialogue_or_sound": "林澈低声说：这是明天早上。",
+            "duration_seconds": 10,
+            "aspect_ratio": "9:16 vertical",
+            "visual_style": "冷色屏幕光，快速推近",
+            "image_prompt": "竖屏电影感，剪辑室，异常素材放大到车牌。",
+            "review_status": "approved",
+            "prompt_ready": True,
+        },
+    )
+    package = storage.export_project_package(project_id)
+
+    assert refreshed is not None
+    edited = refreshed["shots"][0]
+    assert edited["beat_ref"] == "异常素材放大"
+    assert edited["characters"] == ["林澈", "周岚"]
+    assert edited["duration_seconds"] == 10
+    assert edited["review_status"] == "approved"
+    assert edited["prompt_ready"] is False
+    exported = package["deliverables"]["storyboard"]["shots"][0]
+    assert exported["visual_description"] == "林澈把异常素材放大到街口车牌。"
+    assert exported["prompt_ready"] is False
+    activity = storage.get_project_activity(project_id)
+    assert activity[-1]["type"] == "storyboard_edit"
+    assert activity[-1]["title"] == "Storyboard shot updated"
+    assert activity[-1]["details"]["prompt_ready_reset"] is True
+
+
+def test_storyboard_shot_create_delete_and_reorder_keep_sequences_and_cleanup(
+    tmp_path: Path,
+) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    first_shot_id = storyboard["shots"][0]["id"]
+    second_shot_id = storyboard["shots"][1]["id"]
+    image_id = storage.create_generated_image_asset(
+        project_id=project_id,
+        prompt="竖屏电影感，手机来电。",
+        model="gpt-image-2",
+        status="completed",
+        artifact_url="https://provider.test/phone.png",
+    )
+    storage.link_storyboard_shot_image_asset(project_id, first_shot_id, image_id)
+
+    created = storage.create_storyboard_shot(
+        project_id,
+        new_storyboard_shot_fields(),
+        sequence_index=2,
+    )
+    assert created is not None
+    assert [shot["sequence_index"] for shot in created["shots"]] == [1, 2, 3]
+    new_shot = created["shots"][1]
+    assert new_shot["beat_ref"] == "追查地点"
+    assert new_shot["prompt_ready"] is False
+
+    reordered = storage.reorder_storyboard_shots(
+        project_id,
+        [second_shot_id, new_shot["id"], first_shot_id],
+    )
+    assert reordered is not None
+    assert [shot["id"] for shot in reordered["shots"]] == [
+        second_shot_id,
+        new_shot["id"],
+        first_shot_id,
+    ]
+    assert [shot["sequence_index"] for shot in reordered["shots"]] == [1, 2, 3]
+    assert all(not shot["prompt_ready"] for shot in reordered["shots"])
+
+    deleted = storage.delete_storyboard_shot(project_id, first_shot_id)
+    package = storage.export_project_package(project_id)
+
+    assert deleted is not None
+    assert [shot["sequence_index"] for shot in deleted["shots"]] == [1, 2]
+    assert first_shot_id not in [shot["id"] for shot in deleted["shots"]]
+    assert first_shot_id not in [item["shot_id"] for item in deleted["relationships"]]
+    assert deleted["image_links"] == []
+    assert storage.get_project(project_id)["image_assets"][0]["id"] == image_id
+    exported = package["deliverables"]["storyboard"]
+    assert [shot["sequence_index"] for shot in exported["shots"]] == [1, 2]
+    assert exported["image_links"] == []
+
+
+def test_storyboard_shot_reorder_rejects_partial_or_duplicate_ids(tmp_path: Path) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    first_shot_id = storyboard["shots"][0]["id"]
+
+    with pytest.raises(ValueError, match="every current shot"):
+        storage.reorder_storyboard_shots(project_id, [first_shot_id])
+    with pytest.raises(ValueError, match="duplicate"):
+        storage.reorder_storyboard_shots(project_id, [first_shot_id, first_shot_id])
+
+
+def test_storyboard_shot_delete_rejects_final_remaining_shot(tmp_path: Path) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+
+    storage.delete_storyboard_shot(project_id, storyboard["shots"][0]["id"])
+    remaining = storage.get_project_storyboard(project_id)
+    assert remaining is not None
+    with pytest.raises(ValueError, match="final storyboard shot"):
+        storage.delete_storyboard_shot(project_id, remaining["shots"][0]["id"])
+
+
+def test_storyboard_shot_editing_requires_completed_storyboard(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "vidiom.sqlite3")
+    storage.migrate()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+
+    with pytest.raises(RuntimeError, match="completed project"):
+        storage.create_storyboard_shot(project_id, new_storyboard_shot_fields())
+
+    storage.update_project_status(project_id, "completed")
+    with pytest.raises(RuntimeError, match="completed storyboard"):
+        storage.create_storyboard_shot(project_id, new_storyboard_shot_fields())
+
+
 def completed_project_storage(tmp_path: Path) -> tuple[Storage, int]:
     storage = Storage(tmp_path / "vidiom.sqlite3")
     storage.migrate()
@@ -358,6 +508,25 @@ def completed_project_storage(tmp_path: Path) -> tuple[Storage, int]:
     storage.update_project_title(project_id, "倒计时素材")
     storage.update_project_status(project_id, "completed")
     return storage, project_id
+
+
+def new_storyboard_shot_fields() -> dict:
+    return {
+        "beat_ref": "追查地点",
+        "scene_ref": "街口 清晨",
+        "characters": ["林澈"],
+        "scene": "街口",
+        "props": ["手机"],
+        "visual_description": "林澈举着手机跑向素材里的街口。",
+        "action_focus": "他一边看倒计时一边确认路牌。",
+        "dialogue_or_sound": "远处车流声逐渐压过喘息。",
+        "duration_seconds": 9,
+        "aspect_ratio": "9:16 vertical",
+        "visual_style": "清晨逆光，手持奔跑镜头",
+        "image_prompt": "竖屏电影感，清晨街口，林澈举着手机奔跑。",
+        "review_status": "pending",
+        "prompt_ready": True,
+    }
 
 
 def valid_storyboard_payload() -> dict:
