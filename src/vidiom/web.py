@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -43,6 +43,7 @@ class UpdateProjectRequest(BaseModel):
 class RunProjectResponse(BaseModel):
     project: dict
     activity: list[dict]
+    progress: dict
 
 
 ProjectStatusFilter = Literal["draft", "running", "completed", "failed"]
@@ -169,26 +170,59 @@ def update_project(
 @app.post("/api/projects/{project_id}/run", response_model=RunProjectResponse)
 def run_project(
     project_id: int,
+    background_tasks: BackgroundTasks,
     storage: Annotated[Storage, Depends(get_storage)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
     try:
-        project = run_canvas_project(
-            storage=storage,
-            project_id=project_id,
-            agent=OpenAICanvasAgent(settings.openai_model),
+        project = storage.get_project(project_id)
+        if project["status"] == "running":
+            raise RuntimeError("Project is already running.")
+        storage.update_project_status(project_id, "running")
+        background_tasks.add_task(
+            _run_project_job,
+            settings.database_path,
+            project_id,
+            settings.openai_model,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"project": project, "activity": storage.get_project_activity(project_id)}
+    return _project_response(storage, project_id)
 
 
 def _project_response(storage: Storage, project_id: int) -> dict:
+    project = storage.get_project(project_id)
     return {
-        "project": storage.get_project(project_id),
+        "project": project,
         "activity": storage.get_project_activity(project_id),
+        "progress": _project_progress(project),
+    }
+
+
+def _run_project_job(database_path: Path, project_id: int, model: str) -> None:
+    storage = Storage(database_path)
+    storage.migrate()
+    run_canvas_project(
+        storage=storage,
+        project_id=project_id,
+        agent=OpenAICanvasAgent(model),
+    )
+
+
+def _project_progress(project: dict) -> dict:
+    agent_nodes = [node for node in project["nodes"] if node["kind"] == "agent"]
+    active = next((node for node in agent_nodes if node["status"] == "running"), None)
+    completed_count = sum(1 for node in agent_nodes if node["status"] == "completed")
+    failed = next((node for node in agent_nodes if node["status"] == "failed"), None)
+    return {
+        "completed": completed_count,
+        "total": len(agent_nodes),
+        "active_key": active["key"] if active is not None else None,
+        "active_title": active["title"] if active is not None else None,
+        "failed_key": failed["key"] if failed is not None else None,
+        "failed_title": failed["title"] if failed is not None else None,
     }
 
 

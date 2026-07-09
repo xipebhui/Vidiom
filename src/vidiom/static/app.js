@@ -2,9 +2,12 @@ const state = {
   projects: [],
   project: null,
   activity: [],
+  progress: null,
   selectedKey: "seed",
   reviewTab: "script",
   running: false,
+  pollingProjectId: null,
+  pollTimer: null,
   projectFilters: {
     search: "",
     status: "",
@@ -26,6 +29,7 @@ const el = {
   edgeLayer: document.querySelector("#edgeLayer"),
   canvasTitle: document.querySelector("#canvasTitle"),
   canvasMeta: document.querySelector("#canvasMeta"),
+  runProgress: document.querySelector("#runProgress"),
   projectStatus: document.querySelector("#projectStatus"),
   inspectorBody: document.querySelector("#inspectorBody"),
   scriptPreview: document.querySelector("#scriptPreview"),
@@ -81,7 +85,9 @@ async function loadProjects() {
     if (state.projects.length === 0 && !selectedProjectIsVisible) {
       state.project = null;
       state.activity = [];
+      state.progress = null;
       state.selectedKey = "seed";
+      stopProjectPolling();
       render();
       return;
     }
@@ -96,10 +102,12 @@ async function loadProject(projectId) {
     const body = await api(`/api/projects/${projectId}`);
     state.project = body.project;
     state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = state.project.nodes.find((node) => node.key === state.selectedKey)
       ? state.selectedKey
       : "seed";
     render();
+    syncProjectPolling();
   } catch (error) {
     showError(error.message);
   }
@@ -120,6 +128,7 @@ async function createProject() {
     });
     state.project = body.project;
     state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
     el.seedText.value = "";
     resetProjectFilters();
@@ -167,9 +176,11 @@ async function runProject() {
     const body = await api(`/api/projects/${state.project.id}/run`, { method: "POST" });
     state.project = body.project;
     state.activity = body.activity || [];
-    state.selectedKey = "script";
+    state.progress = body.progress || progressFromProject(state.project);
+    state.selectedKey = activeNodeKey(state.progress) || "premise";
     await loadProjects();
     render();
+    syncProjectPolling();
   } catch (error) {
     showError(error.message);
     await loadProject(state.project.id);
@@ -198,6 +209,7 @@ async function saveDraftEdits(event) {
     });
     state.project = body.project;
     state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
     await loadProjects();
     render();
@@ -243,6 +255,7 @@ async function duplicateProject() {
     const body = await api(`/api/projects/${state.project.id}/duplicate`, { method: "POST" });
     state.project = body.project;
     state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
     resetProjectFilters();
     await loadProjects();
@@ -271,6 +284,7 @@ function renderHeader() {
   el.canvasTitle.textContent = project?.title || "Untitled";
   el.canvasMeta.textContent = project ? `#${project.id} · ${project.status}` : "";
   el.projectStatus.textContent = project ? project.status : "Ready";
+  el.runProgress.innerHTML = renderRunProgress(project, state.progress);
 }
 
 function renderProjects() {
@@ -678,6 +692,101 @@ function renderActivityItem(item) {
       </div>
     </div>
   `;
+}
+
+function renderRunProgress(project, progress) {
+  if (!project || !progress || progress.total === 0) return "";
+  const label = progressLabel(project, progress);
+  const percent = Math.round((progress.completed / progress.total) * 100);
+  return `
+    <div class="progress-label">${escapeHtml(label)}</div>
+    <div class="progress-track" aria-label="Agent progress">
+      <span style="width:${percent}%"></span>
+    </div>
+  `;
+}
+
+function progressLabel(project, progress) {
+  if (project.status === "failed") {
+    return progress.failed_title
+      ? `${progress.completed}/${progress.total} · ${progress.failed_title} failed`
+      : `${progress.completed}/${progress.total} · failed`;
+  }
+  if (project.status === "completed") {
+    return `${progress.total}/${progress.total} · completed`;
+  }
+  if (project.status === "running") {
+    return progress.active_title
+      ? `${progress.completed}/${progress.total} · ${progress.active_title}`
+      : `${progress.completed}/${progress.total} · starting`;
+  }
+  return `${progress.completed}/${progress.total} · draft`;
+}
+
+function syncProjectPolling() {
+  if (state.project?.status === "running") {
+    startProjectPolling(state.project.id);
+    return;
+  }
+  stopProjectPolling();
+}
+
+function startProjectPolling(projectId) {
+  if (state.pollingProjectId === projectId && state.pollTimer) return;
+  stopProjectPolling();
+  state.pollingProjectId = projectId;
+  state.pollTimer = window.setInterval(() => pollRunningProject(projectId), 1800);
+}
+
+function stopProjectPolling() {
+  if (state.pollTimer) {
+    window.clearInterval(state.pollTimer);
+  }
+  state.pollTimer = null;
+  state.pollingProjectId = null;
+}
+
+async function pollRunningProject(projectId) {
+  if (!state.project || state.project.id !== projectId) {
+    stopProjectPolling();
+    return;
+  }
+
+  try {
+    const body = await api(`/api/projects/${projectId}`);
+    if (!state.project || state.project.id !== projectId) return;
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    state.selectedKey = activeNodeKey(state.progress) || state.selectedKey;
+    render();
+    if (state.project.status !== "running") {
+      stopProjectPolling();
+      await loadProjects();
+    }
+  } catch (error) {
+    showError(error.message);
+    stopProjectPolling();
+  }
+}
+
+function progressFromProject(project) {
+  if (!project) return null;
+  const agentNodes = project.nodes.filter((node) => node.kind === "agent");
+  const active = agentNodes.find((node) => node.status === "running");
+  const failed = agentNodes.find((node) => node.status === "failed");
+  return {
+    completed: agentNodes.filter((node) => node.status === "completed").length,
+    total: agentNodes.length,
+    active_key: active?.key || null,
+    active_title: active?.title || null,
+    failed_key: failed?.key || null,
+    failed_title: failed?.title || null,
+  };
+}
+
+function activeNodeKey(progress) {
+  return progress?.active_key || progress?.failed_key || null;
 }
 
 function selectedNode() {

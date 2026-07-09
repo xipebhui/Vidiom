@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from test_schema import valid_payload
 
+import vidiom.web as web_module
 from vidiom.canvas import create_canvas_project
 from vidiom.config import Settings
 from vidiom.storage import Storage
@@ -15,6 +16,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
 
     assert 'id="exportProject"' in index_html
     assert 'id="duplicateProject"' in index_html
+    assert 'id="runProgress"' in index_html
     assert 'id="projectSearch"' in index_html
     assert 'id="projectStatusFilter"' in index_html
     assert 'name="duration_minutes"' in index_html
@@ -26,6 +28,9 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderBriefFields" in app_js
     assert "function projectListQuery" in app_js
     assert "function applyProjectFilters" in app_js
+    assert "function startProjectPolling" in app_js
+    assert "function pollRunningProject" in app_js
+    assert "function renderRunProgress" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "async function duplicateProject" in app_js
     assert "function renderCharacterReview" in app_js
@@ -74,6 +79,8 @@ def test_create_project_api(tmp_path) -> None:
     assert body["project"]["status"] == "draft"
     assert body["project"]["brief"]["duration_minutes"] == 5
     assert body["project"]["brief"]["must_include"] == "前三秒出现异常素材"
+    assert body["progress"]["completed"] == 0
+    assert body["progress"]["total"] == 5
     assert body["project"]["nodes"][0]["key"] == "seed"
     assert body["project"]["nodes"][0]["output"]["brief"]["aspect_ratio"] == "9:16 vertical"
 
@@ -215,6 +222,58 @@ def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
     assert activity[1]["description"] == "一个剪辑师发现素材里藏着未来事故。"
     assert activity[-1]["title"] == "Production Agent"
     assert activity[-1]["status"] == "pending"
+    assert response.json()["progress"] == {
+        "completed": 0,
+        "total": 5,
+        "active_key": None,
+        "active_title": None,
+        "failed_key": None,
+        "failed_title": None,
+    }
+
+
+def test_run_project_api_starts_observable_background_run(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    def no_background_run(database_path, project_id, model) -> None:
+        assert database_path == db_path
+        assert project_id == 1
+        assert model == "test-model"
+
+    monkeypatch.setattr(web_module, "_run_project_job", no_background_run)
+    project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.post(f"/api/projects/{project_id}/run")
+        duplicate_response = client.post(f"/api/projects/{project_id}/run")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project"]["status"] == "running"
+    assert body["activity"][0]["title"] == "Project created"
+    assert body["progress"]["completed"] == 0
+    assert body["progress"]["total"] == 5
+    assert duplicate_response.status_code == 400
+    assert duplicate_response.json()["detail"] == "Project is already running."
 
 
 def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> None:
