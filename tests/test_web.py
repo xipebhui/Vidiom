@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from test_schema import valid_payload
+from test_storyboard import valid_storyboard_payload
 
 import vidiom.web as web_module
 from vidiom.canvas import create_canvas_project
@@ -717,7 +718,50 @@ def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> N
     )
     assert body["deliverables"]["script"]["title"] == "倒计时素材"
     assert body["deliverables"]["production_pack"]["shot_plan"][0]["shot"] == "屏幕特写"
+    assert "storyboard" not in body["deliverables"]
     assert body["agent_outputs"]["seed"]["text"] == "一个剪辑师发现素材里藏着未来事故。"
+
+
+def test_export_project_api_includes_completed_storyboard_deliverable(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(project_id, "script", valid_payload())
+    storage.complete_canvas_node(project_id, "production", production_output())
+    storage.update_project_title(project_id, "倒计时素材")
+    storage.update_project_status(project_id, "completed")
+    storage.replace_project_storyboard(project_id, valid_storyboard_payload(), model="gpt-5.5")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.get(f"/api/projects/{project_id}/export")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    storyboard = response.json()["deliverables"]["storyboard"]
+    assert storyboard["storyboard"]["status"] == "completed"
+    assert storyboard["shots"][0]["sequence_index"] == 1
+    assert storyboard["assets"][0]["asset_type"] == "character"
 
 
 def test_update_project_script_api_saves_completed_deliverable_edits(tmp_path) -> None:

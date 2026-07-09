@@ -130,6 +130,16 @@ vidiom scheduler
 
 ## 迭代记录
 
+### 2026-07-10 01:52 CST - 建立 Storyboard 领域模型与存储基础
+
+- 对应需求文档条目：`docs/next-product-requirement.md` 的 “Storyboard Shot Assetization”，覆盖故事板持久化、shot/资产关系、shot-image 关联位置和导出包摘要的基础验收上下文。
+- 对应架构师任务：`docs/development-task-breakdown.md` 的 Task 1 “建立 Storyboard 领域模型与存储基础”，按 `docs/architecture-control-plan.md` 要求先完成 storyboard/shot/asset 一等数据边界，而不是直接堆前端 UI。
+- 本轮开发内容：新增 storyboard JSON schema 与本地校验；SQLite 迁移新增 `storyboards`、`storyboard_shots`、`project_story_assets`、`storyboard_shot_assets`、`storyboard_shot_image_assets`；Storage 支持创建/更新 storyboard 状态、替换完整 storyboard 结果、读取 shots/assets/relations/image links、绑定/解绑 shot 图像资产，并在 completed storyboard 存在时写入导出包。
+- 用户价值：Vidiom 现在有了可持久化的镜头生产数据底座，后续真实模型生成、人工编辑、项目内资产管理和批量分镜图生成都能围绕 shot 与 asset 扩展。
+- 涉及文件/模块：`src/vidiom/storyboard_schema.py`、`src/vidiom/storyboard.py`、`src/vidiom/storage.py`、`tests/test_storyboard.py`、`tests/test_web.py`。
+- 验证命令与结果：`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，50 passed，1 个 StarletteDeprecationWarning 来自依赖。
+- 仍待处理事项：本轮尚未实现真实 `gpt-5.5` storyboard 生成 API、shot 编辑 API、资产编辑 API、Studio 故事板 UI 或批量分镜图生成；下一轮应继续执行架构拆解 Task 2。
+
 ### 2026-07-10 00:48 CST - 接入真实模型配置与项目图像生成
 
 - 对应需求文档条目：`docs/next-product-function-spec.md` 的 “Real Model Provider Integration”，覆盖语言 agent runtime、Image Generation Foundation、Data/API、UX 和 Documentation 验收项。

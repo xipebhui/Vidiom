@@ -9,6 +9,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .storyboard import normalize_storyboard_payload
+from .storyboard_schema import (
+    STORYBOARD_IMAGE_LINK_TYPES,
+    STORYBOARD_STATUSES,
+)
+
 
 @dataclass(frozen=True)
 class Inspiration:
@@ -42,6 +48,19 @@ class GeneratedImageAsset:
     provider_response: dict[str, Any] | None
     error_message: str | None
     created_at: str
+
+
+@dataclass(frozen=True)
+class Storyboard:
+    id: int
+    project_id: int
+    status: str
+    model: str | None
+    source_script_updated_at: str | None
+    source_production_updated_at: str | None
+    error_message: str | None
+    created_at: str
+    updated_at: str
 
 
 class Storage:
@@ -174,6 +193,94 @@ class Storage:
 
                 CREATE INDEX IF NOT EXISTS idx_generated_image_assets_project_id
                     ON generated_image_assets(project_id, id);
+
+                CREATE TABLE IF NOT EXISTS storyboards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'not_started',
+                    model TEXT,
+                    source_script_updated_at TEXT,
+                    source_production_updated_at TEXT,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_storyboards_project_id
+                    ON storyboards(project_id);
+
+                CREATE INDEX IF NOT EXISTS idx_storyboards_status
+                    ON storyboards(status);
+
+                CREATE TABLE IF NOT EXISTS storyboard_shots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    storyboard_id INTEGER NOT NULL,
+                    sequence_index INTEGER NOT NULL,
+                    review_status TEXT NOT NULL DEFAULT 'pending',
+                    beat_ref TEXT NOT NULL,
+                    scene_ref TEXT NOT NULL,
+                    characters_json TEXT NOT NULL,
+                    scene TEXT NOT NULL,
+                    props_json TEXT NOT NULL,
+                    visual_description TEXT NOT NULL,
+                    action_focus TEXT NOT NULL,
+                    dialogue_or_sound TEXT NOT NULL,
+                    duration_seconds INTEGER NOT NULL,
+                    aspect_ratio TEXT NOT NULL,
+                    visual_style TEXT NOT NULL,
+                    image_prompt TEXT NOT NULL,
+                    prompt_ready INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(storyboard_id) REFERENCES storyboards(id) ON DELETE CASCADE,
+                    UNIQUE(storyboard_id, sequence_index)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_storyboard_shots_storyboard_sequence
+                    ON storyboard_shots(storyboard_id, sequence_index);
+
+                CREATE TABLE IF NOT EXISTS project_story_assets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    reference_prompt TEXT NOT NULL,
+                    consistency_notes TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    UNIQUE(project_id, asset_type, name)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_project_story_assets_project_type
+                    ON project_story_assets(project_id, asset_type, name);
+
+                CREATE TABLE IF NOT EXISTS storyboard_shot_assets (
+                    shot_id INTEGER NOT NULL,
+                    asset_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    PRIMARY KEY(shot_id, asset_id, role),
+                    FOREIGN KEY(shot_id) REFERENCES storyboard_shots(id) ON DELETE CASCADE,
+                    FOREIGN KEY(asset_id) REFERENCES project_story_assets(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_storyboard_shot_assets_asset_id
+                    ON storyboard_shot_assets(asset_id);
+
+                CREATE TABLE IF NOT EXISTS storyboard_shot_image_assets (
+                    shot_id INTEGER NOT NULL,
+                    image_asset_id INTEGER NOT NULL,
+                    link_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(shot_id, image_asset_id, link_type),
+                    FOREIGN KEY(shot_id) REFERENCES storyboard_shots(id) ON DELETE CASCADE,
+                    FOREIGN KEY(image_asset_id) REFERENCES generated_image_assets(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_storyboard_shot_image_assets_image_asset_id
+                    ON storyboard_shot_image_assets(image_asset_id);
                 """
             )
             project_columns = {
@@ -502,6 +609,448 @@ class Storage:
         project["image_assets"] = [_image_asset_row(row) for row in asset_rows]
         return project
 
+    def get_or_create_project_storyboard(
+        self,
+        project_id: int,
+        *,
+        status: str = "not_started",
+        model: str | None = None,
+        error_message: str | None = None,
+    ) -> Storyboard:
+        if status not in STORYBOARD_STATUSES:
+            raise ValueError(f"Unsupported storyboard status: {status}")
+        now = utc_now()
+        with self.connect() as conn:
+            source = _storyboard_source_row(conn, project_id)
+            if source["project"] is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            row = conn.execute(
+                """
+                SELECT
+                    id, project_id, status, model, source_script_updated_at,
+                    source_production_updated_at, error_message, created_at, updated_at
+                FROM storyboards
+                WHERE project_id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if row is None:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO storyboards(
+                        project_id, status, model, source_script_updated_at,
+                        source_production_updated_at, error_message, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        project_id,
+                        status,
+                        model,
+                        source["script_updated_at"],
+                        source["production_updated_at"],
+                        error_message[:2000] if error_message else None,
+                        now,
+                        now,
+                    ),
+                )
+                row = conn.execute(
+                    """
+                    SELECT
+                        id, project_id, status, model, source_script_updated_at,
+                        source_production_updated_at, error_message, created_at, updated_at
+                    FROM storyboards
+                    WHERE id = ?
+                    """,
+                    (int(cursor.lastrowid),),
+                ).fetchone()
+                _insert_project_event(
+                    conn=conn,
+                    project_id=project_id,
+                    event_type="storyboard_generation",
+                    title="Storyboard initialized",
+                    status=status,
+                    description="Storyboard workspace created for this project.",
+                    details={"storyboard_id": int(cursor.lastrowid), "model": model},
+                    created_at=now,
+                )
+            if row is None:
+                raise RuntimeError("Storyboard could not be created.")
+            return _storyboard_row(row)
+
+    def update_project_storyboard_status(
+        self,
+        project_id: int,
+        *,
+        status: str,
+        model: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        if status not in STORYBOARD_STATUSES:
+            raise ValueError(f"Unsupported storyboard status: {status}")
+        now = utc_now()
+        with self.connect() as conn:
+            source = _storyboard_source_row(conn, project_id)
+            if source["project"] is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            row = _ensure_storyboard_row(
+                conn=conn,
+                project_id=project_id,
+                status=status,
+                model=model,
+                source_script_updated_at=source["script_updated_at"],
+                source_production_updated_at=source["production_updated_at"],
+                error_message=error_message,
+                now=now,
+            )
+            conn.execute(
+                """
+                UPDATE storyboards
+                SET status = ?, model = COALESCE(?, model),
+                    source_script_updated_at = ?, source_production_updated_at = ?,
+                    error_message = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    model,
+                    source["script_updated_at"],
+                    source["production_updated_at"],
+                    error_message[:2000] if error_message else None,
+                    now,
+                    row["id"],
+                ),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_generation",
+                title=_storyboard_status_title(status),
+                status=status,
+                description=(error_message or _storyboard_status_description(status))[:2000],
+                details={"storyboard_id": row["id"], "model": model or row["model"]},
+                created_at=now,
+            )
+
+    def replace_project_storyboard(
+        self,
+        project_id: int,
+        payload: dict[str, Any],
+        *,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        normalized = normalize_storyboard_payload(payload)
+        now = utc_now()
+        with self.connect() as conn:
+            source = _storyboard_source_row(conn, project_id)
+            if source["project"] is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            storyboard = _ensure_storyboard_row(
+                conn=conn,
+                project_id=project_id,
+                status="completed",
+                model=model,
+                source_script_updated_at=source["script_updated_at"],
+                source_production_updated_at=source["production_updated_at"],
+                error_message=None,
+                now=now,
+            )
+            storyboard_id = int(storyboard["id"])
+            conn.execute(
+                "DELETE FROM storyboard_shots WHERE storyboard_id = ?",
+                (storyboard_id,),
+            )
+            conn.execute(
+                "DELETE FROM project_story_assets WHERE project_id = ?",
+                (project_id,),
+            )
+
+            shot_ids_by_sequence: dict[int, int] = {}
+            for shot in sorted(normalized["shots"], key=lambda item: item["sequence_index"]):
+                cursor = conn.execute(
+                    """
+                    INSERT INTO storyboard_shots(
+                        storyboard_id, sequence_index, review_status, beat_ref, scene_ref,
+                        characters_json, scene, props_json, visual_description, action_focus,
+                        dialogue_or_sound, duration_seconds, aspect_ratio, visual_style,
+                        image_prompt, prompt_ready, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        storyboard_id,
+                        shot["sequence_index"],
+                        shot["review_status"],
+                        shot["beat_ref"],
+                        shot["scene_ref"],
+                        _json_or_none({"items": shot["characters"]}),
+                        shot["scene"],
+                        _json_or_none({"items": shot["props"]}),
+                        shot["visual_description"],
+                        shot["action_focus"],
+                        shot["dialogue_or_sound"],
+                        shot["duration_seconds"],
+                        shot["aspect_ratio"],
+                        shot["visual_style"],
+                        shot["image_prompt"],
+                        1 if shot["prompt_ready"] else 0,
+                        now,
+                        now,
+                    ),
+                )
+                shot_ids_by_sequence[shot["sequence_index"]] = int(cursor.lastrowid)
+
+            asset_ids_by_key: dict[tuple[str, str], int] = {}
+            for asset in normalized["assets"]:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO project_story_assets(
+                        project_id, asset_type, name, description, reference_prompt,
+                        consistency_notes, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        project_id,
+                        asset["asset_type"],
+                        asset["name"],
+                        asset["description"],
+                        asset["reference_prompt"],
+                        asset["consistency_notes"],
+                        now,
+                        now,
+                    ),
+                )
+                asset_ids_by_key[(asset["asset_type"], asset["name"])] = int(cursor.lastrowid)
+
+            for relationship in normalized["relationships"]:
+                shot_id = shot_ids_by_sequence[relationship["shot_sequence_index"]]
+                asset_id = asset_ids_by_key[
+                    (relationship["asset_type"], relationship["asset_name"])
+                ]
+                conn.execute(
+                    """
+                    INSERT INTO storyboard_shot_assets(shot_id, asset_id, role)
+                    VALUES (?, ?, ?)
+                    """,
+                    (shot_id, asset_id, relationship["role"]),
+                )
+
+            conn.execute(
+                """
+                UPDATE storyboards
+                SET status = 'completed', model = COALESCE(?, model),
+                    source_script_updated_at = ?, source_production_updated_at = ?,
+                    error_message = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    model,
+                    source["script_updated_at"],
+                    source["production_updated_at"],
+                    now,
+                    storyboard_id,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE projects
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (now, project_id),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_generation",
+                title="Storyboard saved",
+                status="completed",
+                description=(
+                    f"Saved {len(normalized['shots'])} storyboard shots and "
+                    f"{len(normalized['assets'])} story assets."
+                ),
+                details={
+                    "storyboard_id": storyboard_id,
+                    "model": model,
+                    "shot_count": len(normalized["shots"]),
+                    "asset_count": len(normalized["assets"]),
+                    "relationship_count": len(normalized["relationships"]),
+                },
+                created_at=now,
+            )
+        return self.get_project_storyboard(project_id)
+
+    def get_project_storyboard(self, project_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            storyboard_row = conn.execute(
+                """
+                SELECT
+                    id, project_id, status, model, source_script_updated_at,
+                    source_production_updated_at, error_message, created_at, updated_at
+                FROM storyboards
+                WHERE project_id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if storyboard_row is None:
+                return None
+            shot_rows = conn.execute(
+                """
+                SELECT
+                    id, storyboard_id, sequence_index, review_status, beat_ref, scene_ref,
+                    characters_json, scene, props_json, visual_description, action_focus,
+                    dialogue_or_sound, duration_seconds, aspect_ratio, visual_style,
+                    image_prompt, prompt_ready, created_at, updated_at
+                FROM storyboard_shots
+                WHERE storyboard_id = ?
+                ORDER BY sequence_index, id
+                """,
+                (storyboard_row["id"],),
+            ).fetchall()
+            asset_rows = conn.execute(
+                """
+                SELECT
+                    id, project_id, asset_type, name, description, reference_prompt,
+                    consistency_notes, created_at, updated_at
+                FROM project_story_assets
+                WHERE project_id = ?
+                ORDER BY asset_type, name, id
+                """,
+                (project_id,),
+            ).fetchall()
+            relationship_rows = conn.execute(
+                """
+                SELECT
+                    s.id AS shot_id, s.sequence_index, a.id AS asset_id, a.asset_type,
+                    a.name AS asset_name, rsa.role
+                FROM storyboard_shot_assets rsa
+                JOIN storyboard_shots s ON s.id = rsa.shot_id
+                JOIN project_story_assets a ON a.id = rsa.asset_id
+                WHERE s.storyboard_id = ?
+                ORDER BY s.sequence_index, a.asset_type, a.name, rsa.role
+                """,
+                (storyboard_row["id"],),
+            ).fetchall()
+            image_link_rows = conn.execute(
+                """
+                SELECT
+                    s.id AS shot_id, s.sequence_index, gia.id AS image_asset_id,
+                    gia.project_id, gia.prompt, gia.model, gia.status, gia.artifact_url,
+                    gia.revised_prompt, gia.error_message, sil.link_type, sil.created_at
+                FROM storyboard_shot_image_assets sil
+                JOIN storyboard_shots s ON s.id = sil.shot_id
+                JOIN generated_image_assets gia ON gia.id = sil.image_asset_id
+                WHERE s.storyboard_id = ?
+                ORDER BY s.sequence_index, sil.created_at, gia.id
+                """,
+                (storyboard_row["id"],),
+            ).fetchall()
+        return {
+            "storyboard": _storyboard_row(storyboard_row).__dict__,
+            "shots": [_storyboard_shot_row(row) for row in shot_rows],
+            "assets": [_story_asset_row(row) for row in asset_rows],
+            "relationships": [_storyboard_relationship_row(row) for row in relationship_rows],
+            "image_links": [_storyboard_image_link_row(row) for row in image_link_rows],
+        }
+
+    def link_storyboard_shot_image_asset(
+        self,
+        project_id: int,
+        shot_id: int,
+        image_asset_id: int,
+        *,
+        link_type: str = "reference",
+    ) -> None:
+        if link_type not in STORYBOARD_IMAGE_LINK_TYPES:
+            raise ValueError(f"Unsupported storyboard image link type: {link_type}")
+        now = utc_now()
+        with self.connect() as conn:
+            shot = _project_storyboard_shot(conn, project_id, shot_id)
+            if shot is None:
+                raise LookupError(
+                    f"Storyboard shot {shot_id} was not found in project {project_id}."
+                )
+            image_asset = conn.execute(
+                """
+                SELECT id
+                FROM generated_image_assets
+                WHERE id = ? AND project_id = ?
+                """,
+                (image_asset_id, project_id),
+            ).fetchone()
+            if image_asset is None:
+                raise LookupError(
+                    f"Image asset {image_asset_id} was not found in project {project_id}."
+                )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO storyboard_shot_image_assets(
+                    shot_id, image_asset_id, link_type, created_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (shot_id, image_asset_id, link_type, now),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_image_link",
+                title="Storyboard image linked",
+                status="completed",
+                description=f"Linked image asset {image_asset_id} to storyboard shot.",
+                details={
+                    "shot_id": shot_id,
+                    "sequence_index": shot["sequence_index"],
+                    "image_asset_id": image_asset_id,
+                    "link_type": link_type,
+                },
+                created_at=now,
+            )
+
+    def delete_storyboard_shot_image_asset(
+        self,
+        project_id: int,
+        shot_id: int,
+        image_asset_id: int,
+        *,
+        link_type: str = "reference",
+    ) -> None:
+        if link_type not in STORYBOARD_IMAGE_LINK_TYPES:
+            raise ValueError(f"Unsupported storyboard image link type: {link_type}")
+        now = utc_now()
+        with self.connect() as conn:
+            shot = _project_storyboard_shot(conn, project_id, shot_id)
+            if shot is None:
+                raise LookupError(
+                    f"Storyboard shot {shot_id} was not found in project {project_id}."
+                )
+            conn.execute(
+                """
+                DELETE FROM storyboard_shot_image_assets
+                WHERE shot_id = ? AND image_asset_id = ? AND link_type = ?
+                """,
+                (shot_id, image_asset_id, link_type),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_image_link",
+                title="Storyboard image unlinked",
+                status="completed",
+                description=f"Removed image asset {image_asset_id} from storyboard shot.",
+                details={
+                    "shot_id": shot_id,
+                    "sequence_index": shot["sequence_index"],
+                    "image_asset_id": image_asset_id,
+                    "link_type": link_type,
+                },
+                created_at=now,
+            )
+
     def get_project_activity(self, project_id: int) -> list[dict[str, Any]]:
         project = self.get_project(project_id)
         activity = [
@@ -559,6 +1108,16 @@ class Storage:
         ):
             raise RuntimeError("Project is not ready to export.")
 
+        deliverables = {
+            "script": script,
+            "production_pack": production,
+            "review_notes": project["review_notes"],
+            "image_assets": project["image_assets"],
+        }
+        storyboard = self.get_project_storyboard(project_id)
+        if storyboard is not None and storyboard["storyboard"]["status"] == "completed":
+            deliverables["storyboard"] = storyboard
+
         return {
             "project": {
                 "id": project["id"],
@@ -575,12 +1134,7 @@ class Storage:
                 "created_at": project["created_at"],
                 "updated_at": project["updated_at"],
             },
-            "deliverables": {
-                "script": script,
-                "production_pack": production,
-                "review_notes": project["review_notes"],
-                "image_assets": project["image_assets"],
-            },
+            "deliverables": deliverables,
             "agent_outputs": {
                 key: node["output"]
                 for key, node in nodes.items()
@@ -1260,6 +1814,208 @@ def _image_asset_row(row: sqlite3.Row) -> dict[str, Any]:
         "error_message": row["error_message"],
         "created_at": row["created_at"],
     }
+
+
+def _storyboard_row(row: sqlite3.Row) -> Storyboard:
+    return Storyboard(
+        id=row["id"],
+        project_id=row["project_id"],
+        status=row["status"],
+        model=row["model"],
+        source_script_updated_at=row["source_script_updated_at"],
+        source_production_updated_at=row["source_production_updated_at"],
+        error_message=row["error_message"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _storyboard_shot_row(row: sqlite3.Row) -> dict[str, Any]:
+    characters = _json_from_column(row["characters_json"]) or {"items": []}
+    props = _json_from_column(row["props_json"]) or {"items": []}
+    return {
+        "id": row["id"],
+        "storyboard_id": row["storyboard_id"],
+        "sequence_index": row["sequence_index"],
+        "review_status": row["review_status"],
+        "beat_ref": row["beat_ref"],
+        "scene_ref": row["scene_ref"],
+        "characters": characters.get("items", []),
+        "scene": row["scene"],
+        "props": props.get("items", []),
+        "visual_description": row["visual_description"],
+        "action_focus": row["action_focus"],
+        "dialogue_or_sound": row["dialogue_or_sound"],
+        "duration_seconds": row["duration_seconds"],
+        "aspect_ratio": row["aspect_ratio"],
+        "visual_style": row["visual_style"],
+        "image_prompt": row["image_prompt"],
+        "prompt_ready": bool(row["prompt_ready"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _story_asset_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "asset_type": row["asset_type"],
+        "name": row["name"],
+        "description": row["description"],
+        "reference_prompt": row["reference_prompt"],
+        "consistency_notes": row["consistency_notes"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _storyboard_relationship_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "shot_id": row["shot_id"],
+        "shot_sequence_index": row["sequence_index"],
+        "asset_id": row["asset_id"],
+        "asset_type": row["asset_type"],
+        "asset_name": row["asset_name"],
+        "role": row["role"],
+    }
+
+
+def _storyboard_image_link_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "shot_id": row["shot_id"],
+        "shot_sequence_index": row["sequence_index"],
+        "image_asset": {
+            "id": row["image_asset_id"],
+            "project_id": row["project_id"],
+            "prompt": row["prompt"],
+            "model": row["model"],
+            "status": row["status"],
+            "artifact_url": row["artifact_url"],
+            "revised_prompt": row["revised_prompt"],
+            "error_message": row["error_message"],
+        },
+        "link_type": row["link_type"],
+        "created_at": row["created_at"],
+    }
+
+
+def _storyboard_source_row(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    script = conn.execute(
+        """
+        SELECT updated_at
+        FROM canvas_nodes
+        WHERE project_id = ? AND node_key = 'script'
+        """,
+        (project_id,),
+    ).fetchone()
+    production = conn.execute(
+        """
+        SELECT updated_at
+        FROM canvas_nodes
+        WHERE project_id = ? AND node_key = 'production'
+        """,
+        (project_id,),
+    ).fetchone()
+    return {
+        "project": project,
+        "script_updated_at": script["updated_at"] if script is not None else None,
+        "production_updated_at": production["updated_at"] if production is not None else None,
+    }
+
+
+def _ensure_storyboard_row(
+    *,
+    conn: sqlite3.Connection,
+    project_id: int,
+    status: str,
+    model: str | None,
+    source_script_updated_at: str | None,
+    source_production_updated_at: str | None,
+    error_message: str | None,
+    now: str,
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT
+            id, project_id, status, model, source_script_updated_at,
+            source_production_updated_at, error_message, created_at, updated_at
+        FROM storyboards
+        WHERE project_id = ?
+        """,
+        (project_id,),
+    ).fetchone()
+    if row is not None:
+        return row
+    cursor = conn.execute(
+        """
+        INSERT INTO storyboards(
+            project_id, status, model, source_script_updated_at, source_production_updated_at,
+            error_message, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            project_id,
+            status,
+            model,
+            source_script_updated_at,
+            source_production_updated_at,
+            error_message[:2000] if error_message else None,
+            now,
+            now,
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT
+            id, project_id, status, model, source_script_updated_at,
+            source_production_updated_at, error_message, created_at, updated_at
+        FROM storyboards
+        WHERE id = ?
+        """,
+        (int(cursor.lastrowid),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("Storyboard could not be created.")
+    return row
+
+
+def _project_storyboard_shot(
+    conn: sqlite3.Connection,
+    project_id: int,
+    shot_id: int,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT s.id, s.sequence_index
+        FROM storyboard_shots s
+        JOIN storyboards sb ON sb.id = s.storyboard_id
+        WHERE s.id = ? AND sb.project_id = ?
+        """,
+        (shot_id, project_id),
+    ).fetchone()
+
+
+def _storyboard_status_title(status: str) -> str:
+    titles = {
+        "not_started": "Storyboard initialized",
+        "generating": "Storyboard generation started",
+        "completed": "Storyboard generation completed",
+        "failed": "Storyboard generation failed",
+    }
+    return titles[status]
+
+
+def _storyboard_status_description(status: str) -> str:
+    descriptions = {
+        "not_started": "Storyboard is ready for generation.",
+        "generating": "Storyboard generation is running.",
+        "completed": "Storyboard generation completed.",
+        "failed": "Storyboard generation failed.",
+    }
+    return descriptions[status]
 
 
 def _activity_description(node: dict[str, Any]) -> str:
