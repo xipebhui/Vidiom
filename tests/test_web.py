@@ -20,6 +20,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert 'id="pauseProject"' in index_html
     assert 'id="runProgress"' in index_html
     assert 'id="runtimeSummary"' in index_html
+    assert 'id="runReadiness"' in index_html
     assert 'id="projectSearch"' in index_html
     assert 'id="projectStatusFilter"' in index_html
     assert '<option value="paused">Paused</option>' in index_html
@@ -39,6 +40,14 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function pollRunningProject" in app_js
     assert "function renderRunProgress" in app_js
     assert "function renderRuntimeSummary" in app_js
+    assert "function renderRunReadiness" in app_js
+    assert "function runReadinessReport" in app_js
+    assert "function readinessCheck" in app_js
+    assert "function renderReadinessMetric" in app_js
+    assert "function renderReadinessCheck" in app_js
+    assert "Run Scope" in app_js
+    assert "Ready with notes" in app_js
+    assert "data-readiness-select" in app_js
     assert "function formatDuration" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "async function duplicateProject" in app_js

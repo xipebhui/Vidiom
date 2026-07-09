@@ -530,6 +530,117 @@ textarea:focus {
   margin-bottom: 12px;
 }
 
+.run-readiness {
+  display: grid;
+  gap: 10px;
+}
+
+.readiness-summary {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+}
+
+.readiness-summary strong {
+  font-size: 13px;
+}
+
+.readiness-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.readiness-summary.status-completed {
+  border-color: rgba(20, 125, 117, 0.35);
+  background: rgba(20, 125, 117, 0.08);
+}
+
+.readiness-summary.status-pending {
+  border-color: rgba(183, 121, 31, 0.35);
+  background: rgba(183, 121, 31, 0.08);
+}
+
+.readiness-summary.status-failed {
+  border-color: rgba(189, 79, 69, 0.35);
+  background: rgba(189, 79, 69, 0.08);
+}
+
+.readiness-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.readiness-metric {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--surface-2);
+}
+
+.readiness-metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.readiness-metric strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readiness-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.readiness-check {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 9px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  background: var(--surface-2);
+}
+
+.readiness-check strong {
+  font-size: 12px;
+}
+
+.readiness-check p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.readiness-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.readiness-actions .secondary-button {
+  width: 100%;
+  overflow: hidden;
+  padding: 0 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .review-tabs {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

@@ -38,6 +38,7 @@ const el = {
   runProgress: document.querySelector("#runProgress"),
   projectStatus: document.querySelector("#projectStatus"),
   inspectorBody: document.querySelector("#inspectorBody"),
+  runReadiness: document.querySelector("#runReadiness"),
   scriptPreview: document.querySelector("#scriptPreview"),
   reviewTabs: document.querySelectorAll(".review-tab"),
   activityTimeline: document.querySelector("#activityTimeline"),
@@ -506,6 +507,7 @@ function render() {
   renderProjects();
   renderCanvas();
   renderInspector();
+  renderRunReadiness();
   renderScript();
   renderActivity();
 }
@@ -672,6 +674,142 @@ function renderInspector() {
   if (instructionForm) {
     instructionForm.addEventListener("submit", saveNodeInstructions);
   }
+}
+
+function renderRunReadiness() {
+  const project = state.project;
+  if (!project) {
+    el.runReadiness.innerHTML = `<div class="empty">No project selected</div>`;
+    return;
+  }
+
+  const report = runReadinessReport(project);
+  el.runReadiness.innerHTML = `
+    <div class="readiness-summary status-${escapeHtml(report.status)}">
+      <strong>${escapeHtml(report.label)}</strong>
+      <span>${escapeHtml(report.summary)}</span>
+    </div>
+    <div class="readiness-metrics">
+      ${report.metrics.map(renderReadinessMetric).join("")}
+    </div>
+    <div class="readiness-checks">
+      ${report.checks.map(renderReadinessCheck).join("")}
+    </div>
+    <div class="readiness-actions">
+      <button class="secondary-button" type="button" data-readiness-select="seed">
+        Seed
+      </button>
+      ${
+        report.nextNode
+          ? `<button class="secondary-button" type="button" data-readiness-select="${escapeHtml(
+              report.nextNode.key,
+            )}">
+              ${escapeHtml(report.nextNode.title)}
+            </button>`
+          : ""
+      }
+    </div>
+  `;
+  el.runReadiness.querySelectorAll("[data-readiness-select]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedKey = button.dataset.readinessSelect;
+      render();
+    });
+  });
+}
+
+function runReadinessReport(project) {
+  const agentNodes = project.nodes.filter((node) => node.kind === "agent");
+  const completedNodes = agentNodes.filter((node) => node.status === "completed");
+  const pendingNodes = agentNodes.filter((node) => node.status === "pending");
+  const runningNode = agentNodes.find((node) => node.status === "running");
+  const failedNode = agentNodes.find((node) => node.status === "failed");
+  const nextNode = runningNode || failedNode || pendingNodes[0] || null;
+  const briefFields = [
+    ["duration_minutes", "Duration"],
+    ["aspect_ratio", "Aspect ratio"],
+    ["tone", "Tone"],
+    ["target_audience", "Audience"],
+    ["must_include", "Must include"],
+  ];
+  const filledBriefFields = briefFields.filter(([key]) => {
+    const value = project.brief?.[key];
+    return value !== null && value !== undefined && String(value).trim() !== "";
+  });
+  const guidanceNodes = agentNodes.filter((node) => node.instructions?.guidance);
+  const checks = [
+    readinessCheck(
+      "Seed",
+      String(project.seed_text || "").trim().length >= 12,
+      "Strong enough",
+      "一句话太短，Premise Agent 缺少可执行钩子。",
+    ),
+    readinessCheck(
+      "Creative Brief",
+      filledBriefFields.length >= 4,
+      `${filledBriefFields.length}/${briefFields.length} fields set`,
+      "补齐时长、画幅、语气、观众和必含要素，生成约束会更稳定。",
+    ),
+    readinessCheck(
+      "Agent Guidance",
+      guidanceNodes.length > 0,
+      `${guidanceNodes.length} custom nodes`,
+      "没有节点级指令，agent 将只使用项目 Brief 和上游输出。",
+      "pending",
+    ),
+    readinessCheck(
+      "Run Scope",
+      project.status !== "failed",
+      `${completedNodes.length}/${agentNodes.length} completed`,
+      "当前有失败节点，请先重置或从失败状态恢复。",
+    ),
+  ];
+  const blockers = checks.filter((check) => check.status === "failed").length;
+  const warnings = checks.filter((check) => check.status === "pending").length;
+  const label = blockers ? "Needs attention" : warnings ? "Ready with notes" : "Ready to run";
+  const status = blockers ? "failed" : warnings ? "pending" : "completed";
+
+  return {
+    label,
+    status,
+    summary: `${blockers} blockers · ${warnings} notes`,
+    nextNode,
+    checks,
+    metrics: [
+      { label: "Brief", value: `${filledBriefFields.length}/${briefFields.length}` },
+      { label: "Guidance", value: String(guidanceNodes.length) },
+      { label: "Next", value: nextNode ? nextNode.title : "Complete" },
+    ],
+  };
+}
+
+function readinessCheck(title, passed, passDetail, failDetail, failStatus = "failed") {
+  return {
+    title,
+    status: passed ? "completed" : failStatus,
+    detail: passed ? passDetail : failDetail,
+  };
+}
+
+function renderReadinessMetric(metric) {
+  return `
+    <div class="readiness-metric">
+      <span>${escapeHtml(metric.label)}</span>
+      <strong>${escapeHtml(metric.value)}</strong>
+    </div>
+  `;
+}
+
+function renderReadinessCheck(check) {
+  return `
+    <article class="readiness-check status-${escapeHtml(check.status)}">
+      <span class="activity-dot status-${escapeHtml(check.status)}"></span>
+      <div>
+        <strong>${escapeHtml(check.title)}</strong>
+        <p>${escapeHtml(check.detail)}</p>
+      </div>
+    </article>
+  `;
 }
 
 function renderScript() {
