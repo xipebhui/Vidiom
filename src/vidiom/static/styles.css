@@ -504,7 +504,7 @@ textarea:focus {
 
 .review-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 6px;
   margin-bottom: 12px;
 }
@@ -758,7 +758,8 @@ pre {
   grid-column: 1 / -1;
 }
 
-.quality-summary {
+.quality-summary,
+.delivery-summary {
   display: grid;
   gap: 4px;
   border: 1px solid var(--line);
@@ -767,31 +768,38 @@ pre {
   background: var(--surface-2);
 }
 
-.quality-summary strong {
+.quality-summary strong,
+.delivery-summary strong {
   font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
-.quality-summary span {
+.quality-summary span,
+.delivery-summary span {
   color: var(--muted);
   font-size: 12px;
 }
 
-.quality-summary.status-completed {
+.quality-summary.status-completed,
+.delivery-summary.status-completed {
   border-color: rgba(20, 125, 117, 0.35);
   background: rgba(20, 125, 117, 0.08);
 }
 
-.quality-summary.status-pending {
+.quality-summary.status-pending,
+.delivery-summary.status-pending {
   border-color: rgba(183, 121, 31, 0.35);
   background: rgba(183, 121, 31, 0.08);
 }
 
-.quality-summary.status-failed {
+.quality-summary.status-failed,
+.delivery-summary.status-failed {
   border-color: rgba(189, 79, 69, 0.35);
   background: rgba(189, 79, 69, 0.08);
 }
 
-.quality-metrics {
+.quality-metrics,
+.delivery-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
@@ -799,6 +807,7 @@ pre {
 }
 
 .quality-metric,
+.delivery-metric,
 .quality-issue,
 .review-notes-card {
   border: 1px solid var(--line);
@@ -808,14 +817,16 @@ pre {
   min-width: 0;
 }
 
-.quality-metric span {
+.quality-metric span,
+.delivery-metric span {
   color: var(--muted);
   font-size: 11px;
   font-weight: 850;
   text-transform: uppercase;
 }
 
-.quality-metric strong {
+.quality-metric strong,
+.delivery-metric strong {
   display: block;
   margin-top: 3px;
   font-size: 14px;

@@ -641,7 +641,8 @@ function renderInspector() {
 function renderScript() {
   const script = state.project?.nodes.find((node) => node.key === "script")?.output;
   const production = state.project?.nodes.find((node) => node.key === "production")?.output;
-  renderReviewTabs(Boolean(script), Boolean(production));
+  const canExport = state.project ? projectCanExport(state.project) : false;
+  renderReviewTabs(Boolean(script), Boolean(production), canExport);
   if (!script) {
     el.scriptPreview.innerHTML = `<div class="empty">No generated script</div>`;
     return;
@@ -659,20 +660,28 @@ function renderScript() {
     renderQualityReview(script, production);
     return;
   }
+  if (state.reviewTab === "delivery") {
+    renderDeliveryReview(script, production);
+    return;
+  }
 
   renderScriptReview(script);
 }
 
-function renderReviewTabs(hasScript, hasProduction) {
+function renderReviewTabs(hasScript, hasProduction, canExport) {
   if (state.reviewTab === "production" && !hasProduction) {
+    state.reviewTab = "script";
+  }
+  if (state.reviewTab === "delivery" && !canExport) {
     state.reviewTab = "script";
   }
   el.reviewTabs.forEach((tab) => {
     const isActive = tab.dataset.reviewTab === state.reviewTab;
+    const needsProduction = tab.dataset.reviewTab === "production";
+    const needsExport = tab.dataset.reviewTab === "delivery";
     tab.classList.toggle("active", isActive);
     tab.setAttribute("aria-selected", String(isActive));
-    tab.disabled =
-      !hasScript || (tab.dataset.reviewTab === "production" && !hasProduction);
+    tab.disabled = !hasScript || (needsProduction && !hasProduction) || (needsExport && !canExport);
   });
 }
 
@@ -1120,6 +1129,114 @@ function renderQualityIssue(issue) {
       <p>${escapeHtml(issue.detail)}</p>
     </article>
   `;
+}
+
+function renderDeliveryReview(script, production) {
+  if (!state.project || !projectCanExport(state.project)) {
+    el.scriptPreview.innerHTML = `<div class="empty">Project is not ready to export</div>`;
+    return;
+  }
+
+  const report = qualityReport(script, production, state.project.brief || {});
+  const manifest = deliveryManifest(state.project, script, production, report);
+  el.scriptPreview.innerHTML = `
+    <div class="review-actions">
+      <button class="secondary-button full-width" type="button" data-download-delivery>
+        下载 JSON 成片包
+      </button>
+    </div>
+    <div class="delivery-summary status-${escapeHtml(report.status)}">
+      <strong>${escapeHtml(manifest.filename)}</strong>
+      <span>${escapeHtml(manifest.status)} · ${escapeHtml(manifest.updated_at)}</span>
+    </div>
+    <div class="delivery-grid">
+      ${manifest.metrics.map(renderDeliveryMetric).join("")}
+    </div>
+    <div class="review-section">
+      <h3>Package Manifest</h3>
+      <div class="kv">
+        ${renderDeliveryRow("Title", manifest.title)}
+        ${renderDeliveryRow("Seed", manifest.seed)}
+        ${renderDeliveryRow("Brief", manifest.brief)}
+        ${renderDeliveryRow("Review", manifest.review)}
+        ${renderDeliveryRow("Activity", manifest.activity)}
+      </div>
+    </div>
+    <div class="review-section">
+      <h3>Included Sections</h3>
+      ${renderChecklist("JSON Export", manifest.sections)}
+    </div>
+  `;
+  el.scriptPreview
+    .querySelector("[data-download-delivery]")
+    .addEventListener("click", downloadProjectExport);
+}
+
+function renderDeliveryMetric(metric) {
+  return `
+    <div class="delivery-metric">
+      <span>${escapeHtml(metric.label)}</span>
+      <strong>${escapeHtml(metric.value)}</strong>
+    </div>
+  `;
+}
+
+function renderDeliveryRow(label, value) {
+  return `
+    <div class="kv-row">
+      <div class="kv-key">${escapeHtml(label)}</div>
+      <div class="kv-value">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
+function deliveryManifest(project, script, production, report) {
+  const scenes = Array.isArray(script.scenes) ? script.scenes : [];
+  const beats = Array.isArray(script.episode_outline) ? script.episode_outline : [];
+  const shots = Array.isArray(production.shot_plan) ? production.shot_plan : [];
+  const totalShotSeconds = shots.reduce(
+    (total, shot) => total + Number(shot.duration_seconds || 0),
+    0,
+  );
+  const review = project.review_notes
+    ? releaseStatusLabel(project.review_notes.release_status)
+    : "Not reviewed";
+  const agentOutputs = project.nodes.filter((node) => node.output).length;
+  return {
+    filename: exportFileName(project),
+    title: project.title || "Untitled",
+    seed: project.seed_text,
+    status: report.label,
+    updated_at: formatTime(project.updated_at),
+    brief: briefSummary(project.brief),
+    review,
+    activity: `${state.activity.length} timeline events`,
+    metrics: [
+      { label: "Scenes", value: String(scenes.length) },
+      { label: "Beats", value: String(beats.length) },
+      { label: "Shots", value: String(shots.length) },
+      { label: "Shot Time", value: formatDuration(totalShotSeconds) },
+    ],
+    sections: [
+      "project metadata",
+      `script: ${beats.length} beats, ${scenes.length} scenes`,
+      `production_pack: ${shots.length} shots`,
+      `review_notes: ${review}`,
+      `agent_outputs: ${agentOutputs} nodes`,
+      `activity: ${state.activity.length} events`,
+    ],
+  };
+}
+
+function briefSummary(brief) {
+  if (!brief) return "—";
+  const parts = [];
+  if (brief.duration_minutes) parts.push(`${brief.duration_minutes} min`);
+  if (brief.aspect_ratio) parts.push(brief.aspect_ratio);
+  if (brief.tone) parts.push(brief.tone);
+  if (brief.target_audience) parts.push(brief.target_audience);
+  if (brief.must_include) parts.push(`Must include: ${brief.must_include}`);
+  return parts.join(" · ") || "—";
 }
 
 function qualityReport(script, production, brief) {
