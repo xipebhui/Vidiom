@@ -65,6 +65,10 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "async function saveReviewNotes" in app_js
     assert "function renderReviewNotesEditor" in app_js
     assert "function reviewNotesFromEditor" in app_js
+    assert "function renderReviewActionItems" in app_js
+    assert "function reviewActionSummary" in app_js
+    assert "data-review-action" in app_js
+    assert "Review Tasks" in app_js
     assert "/review-notes" in app_js
     assert "async function saveScriptEdits" in app_js
     assert "function renderScriptEditor" in app_js
@@ -828,6 +832,11 @@ def test_update_project_review_notes_api_saves_completed_release_notes(tmp_path)
         "summary": "对白节奏可用，但街口镜头需要补拍。",
         "next_actions": ["补拍街口广角", "确认白车道具"],
         "approval_notes": ["剧本结构通过"],
+        "action_items": [
+            {"text": "补拍街口广角", "status": "open"},
+            {"text": "确认白车道具", "status": "done"},
+            {"text": "等待场地许可", "status": "blocked"},
+        ],
     }
 
     app.dependency_overrides[get_settings] = override_settings
@@ -848,13 +857,22 @@ def test_update_project_review_notes_api_saves_completed_release_notes(tmp_path)
     review_event = response.json()["activity"][-1]
     assert review_event["type"] == "review_notes"
     assert review_event["title"] == "Review notes saved"
-    assert review_event["description"] == "Marked needs_edits; 2 next actions; 1 approval note"
+    assert review_event["description"] == (
+        "Marked needs_edits; 2 next actions; 1 approval note; "
+        "1 open, 1 blocked, 1 done review tasks"
+    )
     assert review_event["details"]["changed_fields"] == [
         "release_status",
         "summary",
         "next_actions",
         "approval_notes",
+        "action_items",
     ]
+    assert review_event["details"]["action_item_counts"] == {
+        "open": 1,
+        "blocked": 1,
+        "done": 1,
+    }
     export_body = export_response.json()
     assert export_body["project"]["review_notes"] == review_notes
     assert export_body["deliverables"]["review_notes"] == review_notes

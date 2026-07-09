@@ -1064,6 +1064,7 @@ function renderReviewNotes(notes) {
         <strong>${escapeHtml(releaseStatusLabel(notes.release_status))}</strong>
         <p>${escapeHtml(notes.summary)}</p>
       </div>
+      ${renderReviewActionItems(notes.action_items || [])}
       ${renderChecklist("Next Actions", notes.next_actions || [])}
       ${renderChecklist("Approval Notes", notes.approval_notes || [])}
     </div>
@@ -1076,7 +1077,12 @@ function renderReviewNotesEditor(notes, report) {
     summary: "",
     next_actions: report.issues.map((issue) => `${issue.title}: ${issue.detail}`),
     approval_notes: [],
+    action_items: report.issues.map((issue) => ({
+      text: `${issue.title}: ${issue.detail}`,
+      status: issue.severity === "blocker" ? "blocked" : "open",
+    })),
   };
+  const actionItems = [...(values.action_items || []), { text: "", status: "open" }];
   el.scriptPreview.innerHTML = `
     <form id="reviewNotesEditor" class="review-notes-editor">
       <label for="reviewReleaseStatus">Release Status</label>
@@ -1094,6 +1100,15 @@ function renderReviewNotesEditor(notes, report) {
       <textarea id="reviewNextActions" name="next_actions" rows="5">${escapeHtml(
         (values.next_actions || []).join("\n"),
       )}</textarea>
+      <div class="review-section">
+        <h3>Review Tasks</h3>
+        <div id="reviewActionItems" class="review-action-editor-list">
+          ${actionItems.map(renderReviewActionEditor).join("")}
+        </div>
+        <button class="secondary-button full-width" type="button" data-add-review-action>
+          添加发布任务
+        </button>
+      </div>
       <label for="reviewApprovalNotes">Approval Notes</label>
       <textarea id="reviewApprovalNotes" name="approval_notes" rows="4">${escapeHtml(
         (values.approval_notes || []).join("\n"),
@@ -1111,6 +1126,53 @@ function renderReviewNotesEditor(notes, report) {
     state.reviewNotesEditing = false;
     renderScript();
   });
+  el.scriptPreview.querySelector("[data-add-review-action]").addEventListener("click", () => {
+    addReviewActionEditorRow();
+  });
+}
+
+function renderReviewActionItems(actionItems) {
+  if (!actionItems.length) return "";
+  return `
+    <div class="review-action-list">
+      ${actionItems
+        .map(
+          (item) => `
+            <article class="review-action-item status-${escapeHtml(item.status)}">
+              <span>${escapeHtml(reviewActionStatusLabel(item.status))}</span>
+              <p>${escapeHtml(item.text)}</p>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderReviewActionEditor(item) {
+  return `
+    <fieldset class="review-action-editor" data-review-action>
+      <label>Task</label>
+      <input name="action_text" maxlength="300" value="${escapeHtml(item.text || "")}" />
+      <label>Status</label>
+      <select name="action_status">
+        ${renderActionStatusOptions(item.status || "open")}
+      </select>
+    </fieldset>
+  `;
+}
+
+function addReviewActionEditorRow() {
+  const list = el.scriptPreview.querySelector("#reviewActionItems");
+  list.insertAdjacentHTML("beforeend", renderReviewActionEditor({ text: "", status: "open" }));
+}
+
+function renderActionStatusOptions(selectedValue) {
+  return [
+    renderOption("open", "Open", selectedValue),
+    renderOption("done", "Done", selectedValue),
+    renderOption("blocked", "Blocked", selectedValue),
+  ].join("");
 }
 
 function renderQualityMetric(metric) {
@@ -1159,6 +1221,7 @@ function renderDeliveryReview(script, production) {
         ${renderDeliveryRow("Seed", manifest.seed)}
         ${renderDeliveryRow("Brief", manifest.brief)}
         ${renderDeliveryRow("Review", manifest.review)}
+        ${renderDeliveryRow("Review Tasks", manifest.review_tasks)}
         ${renderDeliveryRow("Activity", manifest.activity)}
       </div>
     </div>
@@ -1201,6 +1264,7 @@ function deliveryManifest(project, script, production, report) {
   const review = project.review_notes
     ? releaseStatusLabel(project.review_notes.release_status)
     : "Not reviewed";
+  const reviewTasks = reviewActionSummary(project.review_notes?.action_items || []);
   const agentOutputs = project.nodes.filter((node) => node.output).length;
   return {
     filename: exportFileName(project),
@@ -1210,6 +1274,7 @@ function deliveryManifest(project, script, production, report) {
     updated_at: formatTime(project.updated_at),
     brief: briefSummary(project.brief),
     review,
+    review_tasks: reviewTasks,
     activity: `${state.activity.length} timeline events`,
     metrics: [
       { label: "Scenes", value: String(scenes.length) },
@@ -1222,10 +1287,29 @@ function deliveryManifest(project, script, production, report) {
       `script: ${beats.length} beats, ${scenes.length} scenes`,
       `production_pack: ${shots.length} shots`,
       `review_notes: ${review}`,
+      `review_tasks: ${reviewTasks}`,
       `agent_outputs: ${agentOutputs} nodes`,
       `activity: ${state.activity.length} events`,
     ],
   };
+}
+
+function reviewActionSummary(actionItems) {
+  if (!actionItems.length) return "No tracked tasks";
+  const counts = actionItemCounts(actionItems);
+  return `${counts.open} open · ${counts.blocked} blocked · ${counts.done} done`;
+}
+
+function actionItemCounts(actionItems) {
+  return actionItems.reduce(
+    (counts, item) => {
+      if (item.status === "open") counts.open += 1;
+      if (item.status === "blocked") counts.blocked += 1;
+      if (item.status === "done") counts.done += 1;
+      return counts;
+    },
+    { open: 0, blocked: 0, done: 0 },
+  );
 }
 
 function briefSummary(brief) {
@@ -1501,6 +1585,12 @@ function reviewNotesFromEditor(form) {
     summary: form.querySelector("[name='summary']").value.trim(),
     next_actions: linesFromTextarea(form.querySelector("[name='next_actions']")),
     approval_notes: linesFromTextarea(form.querySelector("[name='approval_notes']")),
+    action_items: Array.from(form.querySelectorAll("[data-review-action]"))
+      .map((group) => ({
+        text: group.querySelector("[name='action_text']").value.trim(),
+        status: group.querySelector("[name='action_status']").value,
+      }))
+      .filter((item) => item.text),
   };
 }
 
@@ -1518,6 +1608,15 @@ function releaseStatusLabel(status) {
     blocked: "Blocked",
   };
   return labels[status];
+}
+
+function reviewActionStatusLabel(status) {
+  const labels = {
+    open: "Open",
+    done: "Done",
+    blocked: "Blocked",
+  };
+  return labels[status] || status;
 }
 
 function renderActivity() {

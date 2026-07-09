@@ -885,6 +885,58 @@ pre {
   line-height: 1.45;
 }
 
+.review-action-list,
+.review-action-editor-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.review-action-item,
+.review-action-editor {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 9px;
+}
+
+.review-action-item.status-open {
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.review-action-item.status-blocked {
+  box-shadow: inset 3px 0 0 var(--coral);
+}
+
+.review-action-item.status-done {
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+
+.review-action-item span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.review-action-item p {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.review-action-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.review-action-editor label {
+  margin-bottom: 0;
+}
+
 .checklist {
   margin-bottom: 8px;
 }

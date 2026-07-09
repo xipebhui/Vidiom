@@ -1200,15 +1200,27 @@ def _production_edit_summary(previous: dict[str, Any], current: dict[str, Any]) 
 def _review_notes_summary(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
     changed_fields = [
         field
-        for field in ("release_status", "summary", "next_actions", "approval_notes")
+        for field in (
+            "release_status",
+            "summary",
+            "next_actions",
+            "approval_notes",
+            "action_items",
+        )
         if previous.get(field) != current.get(field)
     ]
     action_count = len(current.get("next_actions", []))
     approval_count = len(current.get("approval_notes", []))
+    action_items = current.get("action_items", [])
+    open_items = _review_action_status_count(action_items, "open")
+    blocked_items = _review_action_status_count(action_items, "blocked")
+    done_items = _review_action_status_count(action_items, "done")
     description = (
         f"Marked {current.get('release_status')}; "
         f"{action_count} next action{'s' if action_count != 1 else ''}; "
-        f"{approval_count} approval note{'s' if approval_count != 1 else ''}"
+        f"{approval_count} approval note{'s' if approval_count != 1 else ''}; "
+        f"{open_items} open, {blocked_items} blocked, {done_items} done review task"
+        f"{'s' if len(action_items) != 1 else ''}"
     )
     return {
         "description": description,
@@ -1217,8 +1229,18 @@ def _review_notes_summary(previous: dict[str, Any], current: dict[str, Any]) -> 
             "release_status": current.get("release_status"),
             "next_actions": current.get("next_actions", []),
             "approval_notes": current.get("approval_notes", []),
+            "action_items": action_items,
+            "action_item_counts": {
+                "open": open_items,
+                "blocked": blocked_items,
+                "done": done_items,
+            },
         },
     }
+
+
+def _review_action_status_count(action_items: list[dict[str, Any]], status: str) -> int:
+    return sum(1 for item in action_items if item.get("status") == status)
 
 
 def _changed_sequence_count(previous_items: list[Any], current_items: list[Any]) -> int:

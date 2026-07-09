@@ -59,6 +59,7 @@ class RunProjectResponse(BaseModel):
 ProjectStatusFilter = Literal["draft", "running", "paused", "completed", "failed"]
 RevisionStartNode = Literal["premise", "characters", "beats", "script", "production"]
 ReleaseStatus = Literal["ready", "needs_edits", "blocked"]
+ReviewActionStatus = Literal["open", "done", "blocked"]
 
 
 class ReviseProjectRequest(BaseModel):
@@ -83,11 +84,17 @@ class UpdateProductionRequest(BaseModel):
     edit_notes: list[str] = Field(min_length=3, max_length=30)
 
 
+class ReviewActionRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    status: ReviewActionStatus = "open"
+
+
 class UpdateReviewNotesRequest(BaseModel):
     release_status: ReleaseStatus
     summary: str = Field(min_length=1, max_length=500)
     next_actions: list[str] = Field(default_factory=list, max_length=10)
     approval_notes: list[str] = Field(default_factory=list, max_length=10)
+    action_items: list[ReviewActionRequest] = Field(default_factory=list, max_length=20)
 
 
 def get_settings() -> Settings:
@@ -487,6 +494,7 @@ def _review_notes_payload(request: UpdateReviewNotesRequest) -> dict:
     payload["summary"] = payload["summary"].strip()
     payload["next_actions"] = _clean_optional_string_list(payload["next_actions"])
     payload["approval_notes"] = _clean_optional_string_list(payload["approval_notes"])
+    payload["action_items"] = _review_action_payloads(payload["action_items"])
     if not payload["summary"]:
         raise ValueError("Review summary cannot be empty.")
     return payload
@@ -501,6 +509,16 @@ def _clean_string_list(values: list[str]) -> list[str]:
 
 def _clean_optional_string_list(values: list[str]) -> list[str]:
     return [value.strip() for value in values if value.strip()]
+
+
+def _review_action_payloads(values: list[dict]) -> list[dict]:
+    actions = []
+    for value in values:
+        text = str(value["text"]).strip()
+        if not text:
+            raise ValueError("Review action text cannot be empty.")
+        actions.append({"text": text, "status": value["status"]})
+    return actions
 
 
 def _export_filename(payload: dict) -> str:
