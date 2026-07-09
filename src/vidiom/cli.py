@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from dotenv import load_dotenv
@@ -13,6 +14,7 @@ from .generator import OpenAIShortDramaGenerator
 from .ingest import read_jsonl
 from .pipeline import run_once
 from .scheduler import start_scheduler
+from .smoke import DEFAULT_SMOKE_RESULT_PATH, run_real_model_storyboard_smoke
 from .storage import Storage
 
 load_dotenv()
@@ -96,6 +98,28 @@ def export_production(production_id: int, output: Path) -> None:
         encoding="utf-8",
     )
     console.print(f"Exported production {production_id} to {output}")
+
+
+@app.command("smoke-real-model-storyboard")
+def smoke_real_model_storyboard(
+    result_path: Annotated[
+        Path,
+        typer.Option(help="Markdown file that receives the structured smoke result."),
+    ] = DEFAULT_SMOKE_RESULT_PATH,
+    database_path: Annotated[
+        Path | None,
+        typer.Option(help="Optional smoke database path. Defaults to a temporary database."),
+    ] = None,
+) -> None:
+    result = run_real_model_storyboard_smoke(
+        result_path=result_path,
+        database_path=database_path,
+    )
+    console.print(
+        "real_model_storyboard_smoke "
+        f"status={result['overall_status']} "
+        f"result={result_path}"
+    )
 
 
 @app.command("scheduler")

@@ -114,6 +114,7 @@ vidiom ingest-file data/inspirations.jsonl
 vidiom run-once --limit 5
 vidiom list-productions --limit 10
 vidiom export-production <production-id> --output out/script.json
+vidiom smoke-real-model-storyboard --result-path docs/real-model-smoke-result.md
 vidiom serve
 vidiom scheduler
 ```
@@ -131,6 +132,16 @@ vidiom scheduler
 生成成品以 JSON 保存，便于后续接入分镜、视频合成、审核、人审后台或发布系统。
 
 ## 迭代记录
+
+### 2026-07-10 03:54 CST - 建立真实模型 Storyboard smoke 验收记录
+
+- 对应需求文档条目：`docs/next-product-requirement.md` 的 “Real Model Storyboard Acceptance”，覆盖真实 `gpt-5.5` agent、真实 `gpt-5.5` Storyboard、`gpt-image-2` 图像回归、导出包校验，以及长耗时/失败/中断不可写成成功的验收标准。
+- 对应架构师任务：`docs/development-task-breakdown.md` 的首要执行项 Task 1 “建立真实端到端 smoke runner”，并同步 Task 2/4/5 要求的阶段状态、错误脱敏、验收文件和 README 发布状态一致性。
+- 本轮开发内容：新增 `vidiom smoke-real-model-storyboard` 显式验收命令；新增 `RealModelSmokeRun` 阶段记录，按 agent_project、storyboard_generation、project_image_generation、export_package 顺序记录 `not_started`、`running`、`completed`、`failed`、`interrupted`、`incomplete`；新增 `docs/real-model-smoke-result.md`，写入总状态、模型名、阶段耗时、shot/asset/image/export 计数和错误摘要；缺配置、provider 错误、无效 Storyboard payload 和 KeyboardInterrupt 都不会写成成功。
+- 用户价值：用户和下一轮产品/架构任务现在能直接判断真实模型主链路卡在哪个阶段；真实 provider 失败时不会看到假 Storyboard、假 image asset 或假成功导出，也不会把上一轮成功记录误读为本轮复验通过。
+- 涉及文件/模块：`src/vidiom/smoke.py`、`src/vidiom/cli.py`、`tests/test_smoke.py`、`docs/real-model-smoke-result.md`、`README.md`。
+- 验证命令与结果：`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，63 passed，1 个 StarletteDeprecationWarning 来自依赖；`node --check src/vidiom/static/app.js` 通过；`git diff --check` 通过；真实 `.env` smoke 已执行 `vidiom smoke-real-model-storyboard --result-path docs/real-model-smoke-result.md`，结果为 failed：agent_project 使用 `gpt-5.5` 等待 73.444 秒后 provider 返回 503 `system_cpu_overloaded`，Storyboard、项目图像和导出阶段均记录为 incomplete；结果文件未写入 `HM_BASE_URL`、`HM_LLM_APIKEY` 或 `HM_IMG_APIKEY` 的值。
+- 仍待处理事项：本轮建立了可重复验收入口，但真实端到端链路未通过；下一轮产品/架构师应基于 `docs/real-model-smoke-result.md` 继续评估 provider 503/资源过载对真实验收的影响。若要加入 provider 调用超时策略，仍需用户确认后再进入实现。
 
 ### 2026-07-10 02:55 CST - 接入真实 Storyboard 生成与 Studio 审阅闭环
 
