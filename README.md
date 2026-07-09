@@ -114,3 +114,14 @@ vidiom scheduler
 默认数据库路径为 `./data/vidiom.sqlite3`。生产环境建议设置为 `/data/vidiom.sqlite3` 或 `/var/lib/vidiom/vidiom.sqlite3`。
 
 生成成品以 JSON 保存，便于后续接入分镜、视频合成、审核、人审后台或发布系统。
+
+## 迭代记录
+
+### 2026-07-10 00:37 CST - 阻塞：缺少 next product function spec
+
+- 对应需求文档条目：本轮必须读取并以 `docs/next-product-function-spec.md` 为主要需求来源，但该文件不存在；`docs/product-gap-analysis.md` 也不存在；`docs/libtv-product-function-description.md` 可读取。
+- 本轮开发内容：未实现产品功能增量；按任务约束仅新增阻塞说明。
+- 用户价值：避免在缺少验收标准时自行发散产品方向，保留清晰的下一步输入要求。
+- 涉及文件/模块：`docs/development-blockers.md`、`README.md`。
+- 验证命令与结果：`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，29 passed，1 个 StarletteDeprecationWarning 来自依赖。
+- 仍待处理事项：补充 `docs/next-product-function-spec.md`，并在其中写明可验证的验收标准后再继续开发。
