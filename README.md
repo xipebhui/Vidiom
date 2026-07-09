@@ -19,6 +19,8 @@ Vidiom 是一个从“一句话”生成短剧的 agent 画布产品。用户输
 - Review 面板提供交付页，可在下载前查看 JSON 成片包文件名、脚本/拍摄体量、发布备注和导出清单
 - 完成项目可在 Review 面板直接编辑标题、logline、节拍、场景摘要和对白，并保存到成片导出包
 - 完成项目可在 Review 面板直接编辑拍摄包：视觉风格、场景、道具、剪辑备注和镜头计划会保存到成片导出包
+- 完成项目可在 Review 面板的故事板页触发真实 `gpt-5.5` Storyboard 生成，查看生成状态、失败错误、结构化 shots、项目内角色/场景/道具资产和图像关联
+- Storyboard 生成会区分最新生成尝试与最后一次成功结果；本次失败时不会清空旧 shots，也不会把旧结果伪装成本次成功
 - 完成项目可在画布节点上创建修订草稿，保留上游 agent 输出并只重跑所选节点及下游
 - 修订草稿会继承源项目的节点级生成指令，便于针对脚本对白、节拍结构或拍摄包要求做定向重跑
 - 运行 Agent 会立即进入后台生成，画布、进度条和 Timeline 会自动刷新节点状态
@@ -129,6 +131,16 @@ vidiom scheduler
 生成成品以 JSON 保存，便于后续接入分镜、视频合成、审核、人审后台或发布系统。
 
 ## 迭代记录
+
+### 2026-07-10 02:55 CST - 接入真实 Storyboard 生成与 Studio 审阅闭环
+
+- 对应需求文档条目：`docs/next-product-requirement.md` 的 “Real Model Storyboard Generation”，覆盖真实 `gpt-5.5` Storyboard 生成、可见状态、失败语义、Studio 审阅和导出包验收。
+- 对应架构师任务：`docs/development-task-breakdown.md` 的 Task 1-5 首要执行项，先补 Storyboard generation attempt 状态模型，再接真实生成 API、最小审阅/图像关联 API、Studio 故事板视图和导出回归。
+- 本轮开发内容：`storyboards` 增加 `generation_status`、`generation_started_at`、`generation_finished_at`、`generation_error_message`、`last_completed_at`、`last_completed_model`；新增 `StoryboardContextBuilder`、`OpenAIStoryboardGenerator` 和 `generate_project_storyboard()`；新增 `GET /api/projects/{project_id}/storyboard`、`POST /api/projects/{project_id}/storyboard/generate`、shot review、image link/unlink API；Studio Review 增加“故事板”页，可触发生成、展示未生成/生成中/成功/失败/失败但有旧结果状态、扫描 shots/assets/image links，并在交付页展示 Storyboard 计数；导出包在存在最后成功结果时包含 Storyboard metadata、shots、assets、relations 和 image links。
+- 用户价值：用户现在可以从真实 agent 输出继续生成可审阅的逐镜头 Storyboard，并能判断每个 shot 的画面、动作、声音、角色、场景、道具、时长、视觉要求、图像 prompt 和 prompt 准备度；模型失败时能看到 Storyboard 语境错误，且不会误读旧结果。
+- 涉及文件/模块：`src/vidiom/storyboard_schema.py`、`src/vidiom/storyboard.py`、`src/vidiom/storage.py`、`src/vidiom/web.py`、`src/vidiom/static/index.html`、`src/vidiom/static/app.js`、`src/vidiom/static/styles.css`、`tests/test_storyboard.py`、`tests/test_web.py`。
+- 验证命令与结果：`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，58 passed，1 个 StarletteDeprecationWarning 来自依赖；`node --check src/vidiom/static/app.js` 通过；本地 `uvicorn` + Playwright smoke 打开 Studio 成功并确认 Review 中出现“故事板”入口；真实 `.env` smoke 通过，临时数据库中 agent 完成 5/5 节点，Storyboard `gpt-5.5` completed（12 shots、17 assets），`gpt-image-2` 图像资产 completed，导出包包含 Storyboard。
+- 仍待处理事项：本轮只实现最小 shot 审阅状态和已有项目图像关联，不做完整 shot 深度编辑、新增/删除/排序、批量分镜图生成、视频/音频、导演台或自由无限画布；下一轮产品/架构师应继续评估 Storyboard 审阅深度、分镜图批量生成和 LibTV 资产工作台差距。
 
 ### 2026-07-10 01:52 CST - 建立 Storyboard 领域模型与存储基础
 

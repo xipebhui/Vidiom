@@ -8,6 +8,7 @@ from test_schema import valid_payload
 
 from vidiom.canvas import create_canvas_project
 from vidiom.storage import Storage
+from vidiom.storyboard import StoryboardContextBuilder, generate_project_storyboard
 from vidiom.storyboard_schema import validate_storyboard_payload
 
 
@@ -43,6 +44,19 @@ def test_storyboard_migration_creates_tables_and_indexes(tmp_path: Path) -> None
         "idx_storyboard_shot_assets_asset_id",
         "idx_storyboard_shot_image_assets_image_asset_id",
     } <= indexes
+    with sqlite3.connect(storage.db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(storyboards)").fetchall()
+        }
+    assert {
+        "generation_status",
+        "generation_started_at",
+        "generation_finished_at",
+        "generation_error_message",
+        "last_completed_at",
+        "last_completed_model",
+    } <= columns
 
 
 def test_storyboard_migration_preserves_existing_project_and_image_assets(
@@ -99,6 +113,9 @@ def test_completed_project_saves_and_reads_storyboard_relationships(
     )
 
     assert storyboard["storyboard"]["status"] == "completed"
+    assert storyboard["storyboard"]["generation_status"] == "completed"
+    assert storyboard["storyboard"]["last_completed_model"] == "gpt-5.5"
+    assert storyboard["has_completed_result"] is True
     assert storyboard["storyboard"]["model"] == "gpt-5.5"
     assert [shot["sequence_index"] for shot in storyboard["shots"]] == [1, 2]
     assert storyboard["shots"][0]["characters"] == ["林澈"]
@@ -115,6 +132,100 @@ def test_completed_project_saves_and_reads_storyboard_relationships(
     activity = storage.get_project_activity(project_id)
     assert activity[-1]["type"] == "storyboard_generation"
     assert activity[-1]["details"]["shot_count"] == 2
+
+
+def test_storyboard_failed_attempt_retains_completed_result(tmp_path: Path) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    first_shot_id = storyboard["shots"][0]["id"]
+
+    storage.update_project_storyboard_status(
+        project_id,
+        status="failed",
+        model="gpt-5.5",
+        error_message="Provider returned invalid storyboard JSON.",
+    )
+    refreshed = storage.get_project_storyboard(project_id)
+    package = storage.export_project_package(project_id)
+
+    assert refreshed is not None
+    assert refreshed["storyboard"]["generation_status"] == "failed"
+    assert refreshed["storyboard"]["generation_error_message"] == (
+        "Provider returned invalid storyboard JSON."
+    )
+    assert refreshed["has_completed_result"] is True
+    assert refreshed["latest_attempt_failed"] is True
+    assert refreshed["shots"][0]["id"] == first_shot_id
+    exported = package["deliverables"]["storyboard"]
+    assert exported["storyboard"]["generation_status"] == "failed"
+    assert exported["has_completed_result"] is True
+
+
+def test_storyboard_context_builder_includes_project_outputs_and_image_assets(
+    tmp_path: Path,
+) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    storage.create_generated_image_asset(
+        project_id=project_id,
+        prompt="竖屏电影感，剪辑室屏幕出现未来事故。",
+        model="gpt-image-2",
+        status="completed",
+        artifact_url="https://provider.test/image.png",
+    )
+
+    context = StoryboardContextBuilder(storage).build(project_id)
+
+    assert context["project"]["seed_text"] == "一个剪辑师发现素材里藏着未来事故。"
+    assert context["agent_outputs"]["script"]["title"] == "倒计时素材"
+    assert context["agent_outputs"]["production"]["visual_style"].startswith("冷色剪辑室")
+    assert context["reviewed_script"]["logline"]
+    assert context["reviewed_production_pack"]["shot_plan"]
+    assert context["image_assets"][0]["model"] == "gpt-image-2"
+    assert context["image_assets"][0]["artifact_url"] == "https://provider.test/image.png"
+
+
+def test_generate_project_storyboard_uses_gpt55_and_persists_payload(
+    tmp_path: Path,
+) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    client = FakeLanguageClient(valid_storyboard_payload())
+
+    storyboard = generate_project_storyboard(
+        storage=storage,
+        project_id=project_id,
+        model="gpt-5.5",
+        client=client,
+    )
+
+    assert client.calls[0]["model"] == "gpt-5.5"
+    assert client.calls[0]["schema_name"] == "storyboard"
+    assert "一个剪辑师发现素材里藏着未来事故" in client.calls[0]["input_payload"]
+    assert storyboard is not None
+    assert storyboard["storyboard"]["generation_status"] == "completed"
+    assert len(storyboard["shots"]) == 2
+
+
+def test_generate_project_storyboard_failed_provider_does_not_create_shots(
+    tmp_path: Path,
+) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+
+    storyboard = generate_project_storyboard(
+        storage=storage,
+        project_id=project_id,
+        model="gpt-5.5",
+        client=FakeLanguageClient({"shots": [], "assets": [], "relationships": []}),
+    )
+
+    assert storyboard is not None
+    assert storyboard["storyboard"]["generation_status"] == "failed"
+    assert storyboard["has_completed_result"] is False
+    assert storyboard["shots"] == []
+    assert "at least one shot" in storyboard["storyboard"]["generation_error_message"]
 
 
 def test_storyboard_export_includes_shots_assets_relations_and_image_links(
@@ -292,3 +403,33 @@ def production_output() -> dict:
         ],
         "edit_notes": ["前 3 秒必须出现异常画面", "电话声做压迫节奏", "结尾保留警笛声"],
     }
+
+
+class FakeLanguageClient:
+    def __init__(self, payload: dict | None = None, error: Exception | None = None) -> None:
+        self.payload = payload
+        self.error = error
+        self.calls: list[dict] = []
+
+    def generate_json(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_payload: str,
+        schema_name: str,
+        schema: dict,
+    ) -> dict:
+        self.calls.append(
+            {
+                "model": model,
+                "instructions": instructions,
+                "input_payload": input_payload,
+                "schema_name": schema_name,
+                "schema": schema,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        assert self.payload is not None
+        return self.payload

@@ -21,9 +21,19 @@ from .canvas import (
     run_canvas_project,
 )
 from .config import Settings
-from .providers import ImageGenerationClient, OpenAICompatibleImageClient
+from .providers import (
+    ImageGenerationClient,
+    LanguageJSONClient,
+    OpenAICompatibleImageClient,
+    OpenAICompatibleLanguageClient,
+)
 from .schema import validate_short_drama
 from .storage import Storage
+from .storyboard import (
+    generate_project_storyboard,
+    sanitize_storyboard_error,
+    validate_project_ready_for_storyboard,
+)
 
 load_dotenv()
 
@@ -62,6 +72,8 @@ RevisionStartNode = Literal["premise", "characters", "beats", "script", "product
 AgentNodeKey = Literal["premise", "characters", "beats", "script", "production"]
 ReleaseStatus = Literal["ready", "needs_edits", "blocked"]
 ReviewActionStatus = Literal["open", "done", "blocked"]
+StoryboardReviewStatus = Literal["pending", "needs_changes", "approved"]
+StoryboardImageLinkType = Literal["reference", "storyboard_frame"]
 
 
 class ReviseProjectRequest(BaseModel):
@@ -107,6 +119,20 @@ class GenerateImageRequest(BaseModel):
     prompt: str = Field(min_length=2, max_length=2000)
 
 
+class StoryboardShotReviewItem(BaseModel):
+    shot_id: int
+    review_status: StoryboardReviewStatus
+    prompt_ready: bool
+
+
+class StoryboardShotReviewRequest(BaseModel):
+    reviews: list[StoryboardShotReviewItem] = Field(min_length=1, max_length=100)
+
+
+class StoryboardGenerateResponse(BaseModel):
+    storyboard: dict
+
+
 def get_settings() -> Settings:
     return Settings.from_env()
 
@@ -119,6 +145,10 @@ def get_storage(settings: Annotated[Settings, Depends(get_settings)]) -> Storage
 
 def get_image_client() -> ImageGenerationClient:
     return OpenAICompatibleImageClient.from_env()
+
+
+def get_language_client() -> LanguageJSONClient:
+    return OpenAICompatibleLanguageClient.from_env()
 
 
 @asynccontextmanager
@@ -388,6 +418,109 @@ def generate_project_image(
             raise HTTPException(status_code=404, detail=str(lookup_exc)) from lookup_exc
 
 
+@app.get("/api/projects/{project_id}/storyboard")
+def get_project_storyboard(
+    project_id: int,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        return _storyboard_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/projects/{project_id}/storyboard/generate",
+    response_model=StoryboardGenerateResponse,
+)
+def generate_storyboard(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    storage: Annotated[Storage, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    try:
+        validate_project_ready_for_storyboard(storage, project_id)
+        storage.update_project_storyboard_status(
+            project_id,
+            status="generating",
+            model=settings.language_model,
+        )
+        background_tasks.add_task(
+            _generate_storyboard_job,
+            settings.database_path,
+            project_id,
+            settings.language_model,
+        )
+        return {"storyboard": _storyboard_response(storage, project_id)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/projects/{project_id}/storyboard/shots/review")
+def update_storyboard_shot_reviews(
+    project_id: int,
+    request: StoryboardShotReviewRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storage.update_storyboard_shot_reviews(
+            project_id,
+            [item.model_dump() for item in request.reviews],
+        )
+        return {"storyboard": _storyboard_response(storage, project_id)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/storyboard/shots/{shot_id}/image-assets/{asset_id}")
+def link_storyboard_image_asset(
+    project_id: int,
+    shot_id: int,
+    asset_id: int,
+    storage: Annotated[Storage, Depends(get_storage)],
+    link_type: StoryboardImageLinkType = "reference",
+) -> dict:
+    try:
+        storage.link_storyboard_shot_image_asset(
+            project_id,
+            shot_id,
+            asset_id,
+            link_type=link_type,
+        )
+        return {"storyboard": _storyboard_response(storage, project_id)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/projects/{project_id}/storyboard/shots/{shot_id}/image-assets/{asset_id}")
+def unlink_storyboard_image_asset(
+    project_id: int,
+    shot_id: int,
+    asset_id: int,
+    storage: Annotated[Storage, Depends(get_storage)],
+    link_type: StoryboardImageLinkType = "reference",
+) -> dict:
+    try:
+        storage.delete_storyboard_shot_image_asset(
+            project_id,
+            shot_id,
+            asset_id,
+            link_type=link_type,
+        )
+        return {"storyboard": _storyboard_response(storage, project_id)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/projects/{project_id}/run", response_model=RunProjectResponse)
 def run_project(
     project_id: int,
@@ -426,6 +559,52 @@ def _project_response(storage: Storage, project_id: int) -> dict:
     }
 
 
+def _storyboard_response(storage: Storage, project_id: int) -> dict:
+    project = storage.get_project(project_id)
+    storyboard = storage.get_project_storyboard(project_id)
+    if storyboard is None:
+        storyboard = {
+            "storyboard": {
+                "id": None,
+                "project_id": project_id,
+                "status": "not_started",
+                "model": None,
+                "generation_status": "not_started",
+                "generation_started_at": None,
+                "generation_finished_at": None,
+                "generation_error_message": None,
+                "last_completed_at": None,
+                "last_completed_model": None,
+                "source_script_updated_at": None,
+                "source_production_updated_at": None,
+                "error_message": None,
+                "created_at": None,
+                "updated_at": None,
+            },
+            "shots": [],
+            "assets": [],
+            "relationships": [],
+            "image_links": [],
+            "has_completed_result": False,
+            "latest_attempt_failed": False,
+            "result_source": None,
+        }
+    storyboard["image_assets"] = [
+        {
+            "id": asset["id"],
+            "prompt": asset["prompt"],
+            "model": asset["model"],
+            "status": asset["status"],
+            "artifact_url": asset["artifact_url"],
+            "revised_prompt": asset["revised_prompt"],
+            "error_message": asset["error_message"],
+            "created_at": asset["created_at"],
+        }
+        for asset in project["image_assets"]
+    ]
+    return storyboard
+
+
 def _run_project_job(database_path: Path, project_id: int, model: str) -> None:
     storage = Storage(database_path)
     storage.migrate()
@@ -437,6 +616,29 @@ def _run_project_job(database_path: Path, project_id: int, model: str) -> None:
         )
     except Exception:
         logger.exception("Canvas project %s background run failed.", project_id)
+
+
+def _generate_storyboard_job(database_path: Path, project_id: int, model: str) -> None:
+    storage = Storage(database_path)
+    storage.migrate()
+    try:
+        generate_project_storyboard(
+            storage=storage,
+            project_id=project_id,
+            model=model,
+            client=get_language_client(),
+        )
+    except Exception as exc:
+        try:
+            storage.update_project_storyboard_status(
+                project_id,
+                status="failed",
+                model=model,
+                error_message=sanitize_storyboard_error(exc),
+            )
+        except Exception:
+            logger.exception("Storyboard project %s failure state could not be saved.", project_id)
+        logger.exception("Storyboard project %s background generation failed.", project_id)
 
 
 def _project_progress(project: dict) -> dict:

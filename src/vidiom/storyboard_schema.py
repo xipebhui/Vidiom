@@ -20,6 +20,7 @@ STORYBOARD_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "required": [
                     "sequence_index",
+                    "review_status",
                     "beat_ref",
                     "scene_ref",
                     "characters",
@@ -145,6 +146,7 @@ def validate_storyboard_payload(payload: dict[str, Any]) -> None:
 def _validate_shot(shot: dict[str, Any]) -> None:
     required = {
         "sequence_index",
+        "review_status",
         "beat_ref",
         "scene_ref",
         "characters",

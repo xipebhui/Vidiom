@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from test_schema import valid_payload
-from test_storyboard import valid_storyboard_payload
+from test_storyboard import completed_project_storage, valid_storyboard_payload
 
 import vidiom.web as web_module
 from vidiom.canvas import create_canvas_project
@@ -57,6 +57,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert 'data-review-tab="characters"' in index_html
     assert 'data-review-tab="production"' in index_html
     assert 'data-review-tab="images"' in index_html
+    assert 'data-review-tab="storyboard"' in index_html
     assert 'data-review-tab="quality"' in index_html
     assert 'data-review-tab="delivery"' in index_html
     assert "function briefFromForm" in app_js
@@ -100,6 +101,12 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderImageReview" in app_js
     assert "function renderImageAsset" in app_js
     assert "/images" in app_js
+    assert "async function loadStoryboard" in app_js
+    assert "async function generateStoryboard" in app_js
+    assert "function renderStoryboardReview" in app_js
+    assert "function renderStoryboardShot" in app_js
+    assert "function renderStoryboardAssets" in app_js
+    assert "/storyboard/generate" in app_js
     assert "function renderQualityReview" in app_js
     assert "function qualityReport" in app_js
     assert "function missingItems" in app_js
@@ -762,6 +769,218 @@ def test_export_project_api_includes_completed_storyboard_deliverable(tmp_path) 
     assert storyboard["storyboard"]["status"] == "completed"
     assert storyboard["shots"][0]["sequence_index"] == 1
     assert storyboard["assets"][0]["asset_type"] == "character"
+
+
+def test_storyboard_api_gets_not_started_and_generates_completed_payload(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    def complete_storyboard_job(database_path, project_id, model) -> None:
+        assert database_path == db_path
+        assert model == "gpt-5.5"
+        storage = Storage(database_path)
+        storage.migrate()
+        storage.replace_project_storyboard(project_id, valid_storyboard_payload(), model=model)
+
+    storage, project_id = completed_project_storage(tmp_path)
+    db_path = storage.db_path
+    monkeypatch.setattr(web_module, "_generate_storyboard_job", complete_storyboard_job)
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        initial_response = client.get(f"/api/projects/{project_id}/storyboard")
+        generate_response = client.post(f"/api/projects/{project_id}/storyboard/generate")
+        refreshed_response = client.get(f"/api/projects/{project_id}/storyboard")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert initial_response.status_code == 200
+    assert initial_response.json()["storyboard"]["generation_status"] == "not_started"
+    assert generate_response.status_code == 200
+    assert refreshed_response.status_code == 200
+    storyboard = refreshed_response.json()
+    assert storyboard["storyboard"]["generation_status"] == "completed"
+    assert storyboard["storyboard"]["last_completed_model"] == "gpt-5.5"
+    assert storyboard["has_completed_result"] is True
+    assert len(storyboard["shots"]) == 2
+
+
+def test_storyboard_generate_rejects_draft_project(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.post(f"/api/projects/{project_id}/storyboard/generate")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Storyboard generation requires a completed project."
+
+
+def test_storyboard_api_failed_attempt_keeps_previous_completed_result(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    def fail_storyboard_job(database_path, project_id, model) -> None:
+        storage = Storage(database_path)
+        storage.migrate()
+        storage.update_project_storyboard_status(
+            project_id,
+            status="failed",
+            model=model,
+            error_message="Provider returned non-JSON storyboard output.",
+        )
+
+    storage, project_id = completed_project_storage(tmp_path)
+    db_path = storage.db_path
+    storage.replace_project_storyboard(project_id, valid_storyboard_payload(), model="gpt-5.5")
+    monkeypatch.setattr(web_module, "_generate_storyboard_job", fail_storyboard_job)
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        generate_response = client.post(f"/api/projects/{project_id}/storyboard/generate")
+        refreshed_response = client.get(f"/api/projects/{project_id}/storyboard")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert generate_response.status_code == 200
+    storyboard = refreshed_response.json()
+    assert storyboard["storyboard"]["generation_status"] == "failed"
+    assert storyboard["latest_attempt_failed"] is True
+    assert storyboard["has_completed_result"] is True
+    assert len(storyboard["shots"]) == 2
+    assert "non-JSON" in storyboard["storyboard"]["generation_error_message"]
+
+
+def test_storyboard_review_and_image_link_api(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage, project_id = completed_project_storage(tmp_path)
+    db_path = storage.db_path
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    shot_id = storyboard["shots"][0]["id"]
+    image_id = storage.create_generated_image_asset(
+        project_id=project_id,
+        prompt="竖屏电影感，林澈盯着异常素材。",
+        model="gpt-image-2",
+        status="completed",
+        artifact_url="https://provider.test/storyboard-frame.png",
+    )
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        review_response = client.patch(
+            f"/api/projects/{project_id}/storyboard/shots/review",
+            json={
+                "reviews": [
+                    {
+                        "shot_id": shot_id,
+                        "review_status": "approved",
+                        "prompt_ready": True,
+                    }
+                ]
+            },
+        )
+        link_response = client.post(
+            f"/api/projects/{project_id}/storyboard/shots/{shot_id}/image-assets/{image_id}"
+            "?link_type=storyboard_frame",
+        )
+        unlink_response = client.delete(
+            f"/api/projects/{project_id}/storyboard/shots/{shot_id}/image-assets/{image_id}"
+            "?link_type=storyboard_frame",
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert review_response.status_code == 200
+    assert review_response.json()["storyboard"]["shots"][0]["review_status"] == "approved"
+    assert link_response.status_code == 200
+    assert link_response.json()["storyboard"]["image_links"][0]["image_asset"]["id"] == image_id
+    assert unlink_response.status_code == 200
+    assert unlink_response.json()["storyboard"]["image_links"] == []
 
 
 def test_update_project_script_api_saves_completed_deliverable_edits(tmp_path) -> None:

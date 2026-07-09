@@ -12,6 +12,7 @@ from typing import Any
 from .storyboard import normalize_storyboard_payload
 from .storyboard_schema import (
     STORYBOARD_IMAGE_LINK_TYPES,
+    STORYBOARD_REVIEW_STATUSES,
     STORYBOARD_STATUSES,
 )
 
@@ -56,6 +57,12 @@ class Storyboard:
     project_id: int
     status: str
     model: str | None
+    generation_status: str
+    generation_started_at: str | None
+    generation_finished_at: str | None
+    generation_error_message: str | None
+    last_completed_at: str | None
+    last_completed_model: str | None
     source_script_updated_at: str | None
     source_production_updated_at: str | None
     error_message: str | None
@@ -199,6 +206,12 @@ class Storage:
                     project_id INTEGER NOT NULL UNIQUE,
                     status TEXT NOT NULL DEFAULT 'not_started',
                     model TEXT,
+                    generation_status TEXT NOT NULL DEFAULT 'not_started',
+                    generation_started_at TEXT,
+                    generation_finished_at TEXT,
+                    generation_error_message TEXT,
+                    last_completed_at TEXT,
+                    last_completed_model TEXT,
                     source_script_updated_at TEXT,
                     source_production_updated_at TEXT,
                     error_message TEXT,
@@ -295,6 +308,39 @@ class Storage:
             }
             if "instruction_json" not in node_columns:
                 conn.execute("ALTER TABLE canvas_nodes ADD COLUMN instruction_json TEXT")
+            storyboard_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(storyboards)").fetchall()
+            }
+            if "generation_status" not in storyboard_columns:
+                conn.execute(
+                    "ALTER TABLE storyboards "
+                    "ADD COLUMN generation_status TEXT NOT NULL DEFAULT 'not_started'"
+                )
+            if "generation_started_at" not in storyboard_columns:
+                conn.execute("ALTER TABLE storyboards ADD COLUMN generation_started_at TEXT")
+            if "generation_finished_at" not in storyboard_columns:
+                conn.execute("ALTER TABLE storyboards ADD COLUMN generation_finished_at TEXT")
+            if "generation_error_message" not in storyboard_columns:
+                conn.execute("ALTER TABLE storyboards ADD COLUMN generation_error_message TEXT")
+            if "last_completed_at" not in storyboard_columns:
+                conn.execute("ALTER TABLE storyboards ADD COLUMN last_completed_at TEXT")
+            if "last_completed_model" not in storyboard_columns:
+                conn.execute("ALTER TABLE storyboards ADD COLUMN last_completed_model TEXT")
+            conn.execute(
+                """
+                UPDATE storyboards
+                SET generation_status = status
+                WHERE generation_status = 'not_started' AND status != 'not_started'
+                """
+            )
+            conn.execute(
+                """
+                UPDATE storyboards
+                SET last_completed_at = COALESCE(last_completed_at, updated_at),
+                    last_completed_model = COALESCE(last_completed_model, model)
+                WHERE status = 'completed'
+                """
+            )
 
     def add_inspiration(
         self, text: str, source_type: str = "manual", source_ref: str | None = None
@@ -627,7 +673,9 @@ class Storage:
             row = conn.execute(
                 """
                 SELECT
-                    id, project_id, status, model, source_script_updated_at,
+                    id, project_id, status, model, generation_status, generation_started_at,
+                    generation_finished_at, generation_error_message, last_completed_at,
+                    last_completed_model, source_script_updated_at,
                     source_production_updated_at, error_message, created_at, updated_at
                 FROM storyboards
                 WHERE project_id = ?
@@ -638,15 +686,23 @@ class Storage:
                 cursor = conn.execute(
                     """
                     INSERT INTO storyboards(
-                        project_id, status, model, source_script_updated_at,
+                        project_id, status, model, generation_status, generation_started_at,
+                        generation_finished_at, generation_error_message, last_completed_at,
+                        last_completed_model, source_script_updated_at,
                         source_production_updated_at, error_message, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         project_id,
                         status,
                         model,
+                        status,
+                        now if status == "generating" else None,
+                        now if status in {"completed", "failed"} else None,
+                        error_message[:2000] if error_message else None,
+                        now if status == "completed" else None,
+                        model if status == "completed" else None,
                         source["script_updated_at"],
                         source["production_updated_at"],
                         error_message[:2000] if error_message else None,
@@ -657,7 +713,9 @@ class Storage:
                 row = conn.execute(
                     """
                     SELECT
-                        id, project_id, status, model, source_script_updated_at,
+                        id, project_id, status, model, generation_status, generation_started_at,
+                        generation_finished_at, generation_error_message, last_completed_at,
+                        last_completed_model, source_script_updated_at,
                         source_production_updated_at, error_message, created_at, updated_at
                     FROM storyboards
                     WHERE id = ?
@@ -707,11 +765,39 @@ class Storage:
                 """
                 UPDATE storyboards
                 SET status = ?, model = COALESCE(?, model),
+                    generation_status = ?,
+                    generation_started_at = CASE
+                        WHEN ? = 'generating' THEN ?
+                        ELSE generation_started_at
+                    END,
+                    generation_finished_at = CASE
+                        WHEN ? IN ('completed', 'failed') THEN ?
+                        ELSE NULL
+                    END,
+                    generation_error_message = ?,
+                    last_completed_at = CASE
+                        WHEN ? = 'completed' THEN ?
+                        ELSE last_completed_at
+                    END,
+                    last_completed_model = CASE
+                        WHEN ? = 'completed' THEN COALESCE(?, last_completed_model)
+                        ELSE last_completed_model
+                    END,
                     source_script_updated_at = ?, source_production_updated_at = ?,
                     error_message = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
+                    status,
+                    model,
+                    status,
+                    status,
+                    now,
+                    status,
+                    now,
+                    error_message[:2000] if error_message else None,
+                    status,
+                    now,
                     status,
                     model,
                     source["script_updated_at"],
@@ -840,11 +926,19 @@ class Storage:
                 """
                 UPDATE storyboards
                 SET status = 'completed', model = COALESCE(?, model),
+                    generation_status = 'completed',
+                    generation_finished_at = ?,
+                    generation_error_message = NULL,
+                    last_completed_at = ?,
+                    last_completed_model = COALESCE(?, last_completed_model),
                     source_script_updated_at = ?, source_production_updated_at = ?,
                     error_message = NULL, updated_at = ?
                 WHERE id = ?
                 """,
                 (
+                    model,
+                    now,
+                    now,
                     model,
                     source["script_updated_at"],
                     source["production_updated_at"],
@@ -889,7 +983,9 @@ class Storage:
             storyboard_row = conn.execute(
                 """
                 SELECT
-                    id, project_id, status, model, source_script_updated_at,
+                    id, project_id, status, model, generation_status, generation_started_at,
+                    generation_finished_at, generation_error_message, last_completed_at,
+                    last_completed_model, source_script_updated_at,
                     source_production_updated_at, error_message, created_at, updated_at
                 FROM storyboards
                 WHERE project_id = ?
@@ -955,6 +1051,12 @@ class Storage:
             "assets": [_story_asset_row(row) for row in asset_rows],
             "relationships": [_storyboard_relationship_row(row) for row in relationship_rows],
             "image_links": [_storyboard_image_link_row(row) for row in image_link_rows],
+            "has_completed_result": storyboard_row["last_completed_at"] is not None
+            and len(shot_rows) > 0,
+            "latest_attempt_failed": storyboard_row["generation_status"] == "failed",
+            "result_source": "last_completed_result"
+            if storyboard_row["last_completed_at"] is not None and len(shot_rows) > 0
+            else None,
         }
 
     def link_storyboard_shot_image_asset(
@@ -1051,6 +1153,65 @@ class Storage:
                 created_at=now,
             )
 
+    def update_storyboard_shot_reviews(
+        self,
+        project_id: int,
+        reviews: Iterable[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        rows = list(reviews)
+        if not rows:
+            raise ValueError("Provide at least one storyboard shot review.")
+        with self.connect() as conn:
+            for review in rows:
+                shot_id = int(review["shot_id"])
+                review_status = str(review["review_status"])
+                prompt_ready = bool(review["prompt_ready"])
+                if review_status not in STORYBOARD_REVIEW_STATUSES:
+                    raise ValueError(f"Unsupported storyboard review status: {review_status}")
+                shot = conn.execute(
+                    """
+                    SELECT s.id, s.sequence_index, s.image_prompt
+                    FROM storyboard_shots s
+                    JOIN storyboards sb ON sb.id = s.storyboard_id
+                    WHERE s.id = ? AND sb.project_id = ?
+                    """,
+                    (shot_id, project_id),
+                ).fetchone()
+                if shot is None:
+                    raise LookupError(
+                        f"Storyboard shot {shot_id} was not found in project {project_id}."
+                    )
+                if prompt_ready and not str(shot["image_prompt"]).strip():
+                    raise ValueError("Prompt ready requires a non-empty image prompt.")
+                conn.execute(
+                    """
+                    UPDATE storyboard_shots
+                    SET review_status = ?, prompt_ready = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (review_status, 1 if prompt_ready else 0, now, shot_id),
+                )
+            conn.execute(
+                """
+                UPDATE projects
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (now, project_id),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="storyboard_review",
+                title="Storyboard reviews saved",
+                status="completed",
+                description=f"Updated {len(rows)} storyboard shot review states.",
+                details={"shot_ids": [int(review["shot_id"]) for review in rows]},
+                created_at=now,
+            )
+        return self.get_project_storyboard(project_id)
+
     def get_project_activity(self, project_id: int) -> list[dict[str, Any]]:
         project = self.get_project(project_id)
         activity = [
@@ -1115,7 +1276,7 @@ class Storage:
             "image_assets": project["image_assets"],
         }
         storyboard = self.get_project_storyboard(project_id)
-        if storyboard is not None and storyboard["storyboard"]["status"] == "completed":
+        if storyboard is not None and storyboard["has_completed_result"]:
             deliverables["storyboard"] = storyboard
 
         return {
@@ -1822,6 +1983,12 @@ def _storyboard_row(row: sqlite3.Row) -> Storyboard:
         project_id=row["project_id"],
         status=row["status"],
         model=row["model"],
+        generation_status=row["generation_status"],
+        generation_started_at=row["generation_started_at"],
+        generation_finished_at=row["generation_finished_at"],
+        generation_error_message=row["generation_error_message"],
+        last_completed_at=row["last_completed_at"],
+        last_completed_model=row["last_completed_model"],
         source_script_updated_at=row["source_script_updated_at"],
         source_production_updated_at=row["source_production_updated_at"],
         error_message=row["error_message"],
@@ -1939,7 +2106,9 @@ def _ensure_storyboard_row(
     row = conn.execute(
         """
         SELECT
-            id, project_id, status, model, source_script_updated_at,
+            id, project_id, status, model, generation_status, generation_started_at,
+            generation_finished_at, generation_error_message, last_completed_at,
+            last_completed_model, source_script_updated_at,
             source_production_updated_at, error_message, created_at, updated_at
         FROM storyboards
         WHERE project_id = ?
@@ -1951,15 +2120,23 @@ def _ensure_storyboard_row(
     cursor = conn.execute(
         """
         INSERT INTO storyboards(
-            project_id, status, model, source_script_updated_at, source_production_updated_at,
+            project_id, status, model, generation_status, generation_started_at,
+            generation_finished_at, generation_error_message, last_completed_at,
+            last_completed_model, source_script_updated_at, source_production_updated_at,
             error_message, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
             status,
             model,
+            status,
+            now if status == "generating" else None,
+            now if status in {"completed", "failed"} else None,
+            error_message[:2000] if error_message else None,
+            now if status == "completed" else None,
+            model if status == "completed" else None,
             source_script_updated_at,
             source_production_updated_at,
             error_message[:2000] if error_message else None,
@@ -1970,7 +2147,9 @@ def _ensure_storyboard_row(
     row = conn.execute(
         """
         SELECT
-            id, project_id, status, model, source_script_updated_at,
+            id, project_id, status, model, generation_status, generation_started_at,
+            generation_finished_at, generation_error_message, last_completed_at,
+            last_completed_model, source_script_updated_at,
             source_production_updated_at, error_message, created_at, updated_at
         FROM storyboards
         WHERE id = ?

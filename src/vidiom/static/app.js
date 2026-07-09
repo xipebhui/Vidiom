@@ -1,5 +1,13 @@
 const WORKSPACE_STORAGE_KEY = "vidiom.studio.workspace.v1";
-const REVIEW_TABS = new Set(["script", "characters", "production", "images", "quality", "delivery"]);
+const REVIEW_TABS = new Set([
+  "script",
+  "characters",
+  "production",
+  "images",
+  "storyboard",
+  "quality",
+  "delivery",
+]);
 const NODE_KEYS = new Set(["seed", "premise", "characters", "beats", "script", "production"]);
 const PROJECT_STATUSES = new Set(["", "draft", "running", "paused", "completed", "failed"]);
 const AGENT_SEQUENCE = [
@@ -22,6 +30,11 @@ const state = {
   productionEditing: false,
   reviewNotesEditing: false,
   imageGenerating: false,
+  storyboard: null,
+  storyboardLoading: false,
+  storyboardGenerating: false,
+  selectedStoryboardShotId: null,
+  storyboardPollTimer: null,
   running: false,
   pollingProjectId: null,
   pollTimer: null,
@@ -74,6 +87,9 @@ el.reviewTabs.forEach((tab) => {
     state.reviewTab = tab.dataset.reviewTab;
     saveWorkspaceState();
     renderScript();
+    if (state.reviewTab === "storyboard") {
+      loadStoryboard();
+    }
   });
 });
 
@@ -140,6 +156,8 @@ async function loadProject(projectId) {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.runtime = body.runtime || null;
+    state.storyboard = null;
+    state.selectedStoryboardShotId = null;
     state.selectedKey = state.project.nodes.find((node) => node.key === state.selectedKey)
       ? state.selectedKey
       : "seed";
@@ -147,6 +165,9 @@ async function loadProject(projectId) {
     resetReviewEditors();
     render();
     syncProjectPolling();
+    if (state.reviewTab === "storyboard") {
+      await loadStoryboard();
+    }
   } catch (error) {
     showError(error.message);
   }
@@ -434,6 +455,121 @@ async function generateProjectImage(event) {
     setBusy(false);
     renderScript();
   }
+}
+
+async function loadStoryboard() {
+  if (!state.project) return;
+  state.storyboardLoading = true;
+  renderScript();
+  try {
+    const body = await api(`/api/projects/${state.project.id}/storyboard`);
+    state.storyboard = body;
+    if (!state.selectedStoryboardShotId && body.shots?.length) {
+      state.selectedStoryboardShotId = body.shots[0].id;
+    }
+    renderScript();
+    if (body.storyboard?.generation_status === "generating") {
+      startStoryboardPolling();
+    } else {
+      stopStoryboardPolling();
+    }
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    state.storyboardLoading = false;
+    renderScript();
+  }
+}
+
+async function generateStoryboard() {
+  if (!state.project || state.project.status !== "completed") return;
+  state.storyboardGenerating = true;
+  renderScript();
+  try {
+    const body = await api(`/api/projects/${state.project.id}/storyboard/generate`, {
+      method: "POST",
+    });
+    state.storyboard = body.storyboard;
+    startStoryboardPolling();
+    renderScript();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    state.storyboardGenerating = false;
+    renderScript();
+  }
+}
+
+async function saveStoryboardReview(event) {
+  const button = event.currentTarget;
+  const shotId = Number(button.dataset.storyboardReview);
+  const reviewStatus = button.dataset.reviewStatus;
+  const shot = state.storyboard?.shots?.find((item) => item.id === shotId);
+  if (!state.project || !shot) return;
+  try {
+    const body = await api(`/api/projects/${state.project.id}/storyboard/shots/review`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        reviews: [
+          {
+            shot_id: shotId,
+            review_status: reviewStatus,
+            prompt_ready: Boolean(shot.prompt_ready),
+          },
+        ],
+      }),
+    });
+    state.storyboard = body.storyboard;
+    renderScript();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function toggleStoryboardImageLink(event) {
+  const button = event.currentTarget;
+  const shotId = Number(button.dataset.storyboardImageShot);
+  const assetId = Number(button.dataset.storyboardImageAsset);
+  const linked = button.dataset.linked === "true";
+  if (!state.project || !shotId || !assetId) return;
+  try {
+    const method = linked ? "DELETE" : "POST";
+    const body = await api(
+      `/api/projects/${state.project.id}/storyboard/shots/${shotId}/image-assets/${assetId}?link_type=reference`,
+      { method },
+    );
+    state.storyboard = body.storyboard;
+    renderScript();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function startStoryboardPolling() {
+  if (state.storyboardPollTimer) return;
+  state.storyboardPollTimer = window.setInterval(async () => {
+    if (!state.project) {
+      stopStoryboardPolling();
+      return;
+    }
+    try {
+      const body = await api(`/api/projects/${state.project.id}/storyboard`);
+      state.storyboard = body;
+      renderScript();
+      if (body.storyboard?.generation_status !== "generating") {
+        stopStoryboardPolling();
+      }
+    } catch (error) {
+      showError(error.message);
+      stopStoryboardPolling();
+    }
+  }, 2000);
+}
+
+function stopStoryboardPolling() {
+  if (!state.storyboardPollTimer) return;
+  window.clearInterval(state.storyboardPollTimer);
+  state.storyboardPollTimer = null;
 }
 
 async function saveNodeInstructions(event) {
@@ -883,6 +1019,10 @@ function renderScript() {
       renderImageReview(null, null);
       return;
     }
+    if (state.reviewTab === "storyboard" && state.project) {
+      renderStoryboardReview(null, null);
+      return;
+    }
     el.scriptPreview.innerHTML = `<div class="empty">No generated script</div>`;
     return;
   }
@@ -897,6 +1037,10 @@ function renderScript() {
   }
   if (state.reviewTab === "images") {
     renderImageReview(script, production);
+    return;
+  }
+  if (state.reviewTab === "storyboard") {
+    renderStoryboardReview(script, production);
     return;
   }
   if (state.reviewTab === "quality") {
@@ -922,7 +1066,7 @@ function renderReviewTabs(hasScript, hasProduction, canExport, hasProject) {
     const isActive = tab.dataset.reviewTab === state.reviewTab;
     const needsProduction = tab.dataset.reviewTab === "production";
     const needsExport = tab.dataset.reviewTab === "delivery";
-    const needsProject = tab.dataset.reviewTab === "images";
+    const needsProject = tab.dataset.reviewTab === "images" || tab.dataset.reviewTab === "storyboard";
     tab.classList.toggle("active", isActive);
     tab.setAttribute("aria-selected", String(isActive));
     tab.disabled =
@@ -1270,6 +1414,181 @@ function renderImageAsset(asset) {
   `;
 }
 
+function renderStoryboardReview(script, production) {
+  if (!state.project) {
+    el.scriptPreview.innerHTML = `<div class="empty">No project selected</div>`;
+    return;
+  }
+  const storyboard = state.storyboard;
+  if (state.storyboardLoading && !storyboard) {
+    el.scriptPreview.innerHTML = `<div class="empty">Loading storyboard</div>`;
+    return;
+  }
+  const status = storyboard?.storyboard?.generation_status || "not_started";
+  const canGenerate = state.project.status === "completed";
+  const shots = storyboard?.shots || [];
+  const selectedShot =
+    shots.find((shot) => shot.id === state.selectedStoryboardShotId) || shots[0] || null;
+  const shotList = shots.length
+    ? shots.map(renderStoryboardShot).join("")
+    : `<div class="empty">No storyboard shots yet</div>`;
+  el.scriptPreview.innerHTML = `
+    <div class="review-actions">
+      <button class="primary-button full-width" type="button" data-generate-storyboard ${
+        !canGenerate || state.storyboardGenerating || status === "generating" ? "disabled" : ""
+      }>
+        ${status === "generating" || state.storyboardGenerating ? "故事板生成中..." : "生成故事板"}
+      </button>
+    </div>
+    ${renderStoryboardStatus(storyboard, status, canGenerate)}
+    <div class="review-section">
+      <h3>Storyboard Shots</h3>
+      <div class="storyboard-shot-list">${shotList}</div>
+    </div>
+    <div class="review-section">
+      <h3>Story Assets</h3>
+      ${renderStoryboardAssets(storyboard?.assets || [], storyboard?.relationships || [])}
+    </div>
+    <div class="review-section">
+      <h3>Image Links</h3>
+      ${renderStoryboardImageLinks(selectedShot, storyboard)}
+    </div>
+  `;
+  const generateButton = el.scriptPreview.querySelector("[data-generate-storyboard]");
+  if (generateButton) {
+    generateButton.addEventListener("click", generateStoryboard);
+  }
+  el.scriptPreview.querySelectorAll("[data-storyboard-shot]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedStoryboardShotId = Number(button.dataset.storyboardShot);
+      renderScript();
+    });
+  });
+  el.scriptPreview.querySelectorAll("[data-storyboard-review]").forEach((button) => {
+    button.addEventListener("click", saveStoryboardReview);
+  });
+  el.scriptPreview.querySelectorAll("[data-storyboard-image-asset]").forEach((button) => {
+    button.addEventListener("click", toggleStoryboardImageLink);
+  });
+}
+
+function renderStoryboardStatus(storyboard, status, canGenerate) {
+  if (!canGenerate) {
+    return `<div class="quality-summary status-pending"><strong>Agent 未完成</strong><span>需先完成 Script 和 Production。</span></div>`;
+  }
+  if (!storyboard || status === "not_started") {
+    return `<div class="quality-summary status-pending"><strong>未生成</strong><span>完成项目可触发真实 gpt-5.5 故事板生成。</span></div>`;
+  }
+  if (status === "generating") {
+    return `<div class="quality-summary status-running"><strong>生成中</strong><span>正在调用 gpt-5.5 拆解结构化 shots。</span></div>`;
+  }
+  if (status === "failed" && storyboard.has_completed_result) {
+    return `
+      <div class="quality-summary status-failed">
+        <strong>本次生成失败</strong>
+        <span>${escapeHtml(storyboard.storyboard.generation_error_message || "Storyboard generation failed.")}；下面是上次成功结果。</span>
+      </div>
+    `;
+  }
+  if (status === "failed") {
+    return `
+      <div class="quality-summary status-failed">
+        <strong>生成失败</strong>
+        <span>${escapeHtml(storyboard.storyboard.generation_error_message || "Storyboard generation failed.")}</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="quality-summary status-completed">
+      <strong>故事板已生成</strong>
+      <span>${escapeHtml(storyboard.shots.length)} shots · ${escapeHtml(storyboard.assets.length)} assets · ${escapeHtml(storyboard.image_links.length)} image links</span>
+    </div>
+  `;
+}
+
+function renderStoryboardShot(shot) {
+  const selected = shot.id === state.selectedStoryboardShotId ? " selected" : "";
+  return `
+    <article class="storyboard-shot${selected}">
+      <button class="storyboard-shot-select" type="button" data-storyboard-shot="${escapeHtml(shot.id)}">
+        <strong>${escapeHtml(shot.sequence_index)}. ${escapeHtml(shot.beat_ref)}</strong>
+        <span class="status-pill status-${escapeHtml(shot.review_status)}">${escapeHtml(shot.review_status)}</span>
+      </button>
+      <p>${escapeHtml(shot.visual_description)}</p>
+      <dl>
+        <dt>Scene</dt><dd>${escapeHtml(shot.scene_ref)} · ${escapeHtml(shot.scene)}</dd>
+        <dt>Characters</dt><dd>${escapeHtml(shot.characters.join(", ") || "None")}</dd>
+        <dt>Props</dt><dd>${escapeHtml(shot.props.join(", ") || "None")}</dd>
+        <dt>Action</dt><dd>${escapeHtml(shot.action_focus)}</dd>
+        <dt>Sound</dt><dd>${escapeHtml(shot.dialogue_or_sound)}</dd>
+        <dt>Duration</dt><dd>${escapeHtml(shot.duration_seconds)}s · ${escapeHtml(shot.aspect_ratio)}</dd>
+        <dt>Style</dt><dd>${escapeHtml(shot.visual_style)}</dd>
+        <dt>Image Prompt</dt><dd>${escapeHtml(shot.image_prompt)}</dd>
+      </dl>
+      <div class="storyboard-shot-actions">
+        <span class="status-pill status-${shot.prompt_ready ? "completed" : "pending"}">
+          ${shot.prompt_ready ? "Prompt ready" : "Prompt not ready"}
+        </span>
+        <button class="secondary-button" type="button" data-storyboard-review="${escapeHtml(shot.id)}" data-review-status="approved">批准</button>
+        <button class="secondary-button" type="button" data-storyboard-review="${escapeHtml(shot.id)}" data-review-status="needs_changes">需修改</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderStoryboardAssets(assets, relationships) {
+  if (!assets.length) return `<div class="empty">No story assets</div>`;
+  return assets
+    .map((asset) => {
+      const appearances = relationships
+        .filter((relationship) => relationship.asset_id === asset.id)
+        .map((relationship) => `#${relationship.shot_sequence_index} ${relationship.role}`);
+      return `
+        <article class="story-asset">
+          <strong>${escapeHtml(asset.asset_type)} · ${escapeHtml(asset.name)}</strong>
+          <p>${escapeHtml(asset.description)}</p>
+          <small>${escapeHtml(asset.consistency_notes || "No consistency notes")}</small>
+          <small>Shots: ${escapeHtml(appearances.join(", ") || "None")}</small>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderStoryboardImageLinks(selectedShot, storyboard) {
+  if (!selectedShot) return `<div class="empty">Select a shot after generation</div>`;
+  const imageAssets = storyboard?.image_assets || [];
+  if (!imageAssets.length) return `<div class="empty">No project image assets</div>`;
+  const links = storyboard?.image_links || [];
+  return imageAssets
+    .map((asset) => {
+      const linked = links.some(
+        (link) =>
+          link.shot_id === selectedShot.id &&
+          link.image_asset.id === asset.id &&
+          link.link_type === "reference",
+      );
+      return `
+        <article class="storyboard-image-link">
+          <div>
+            <strong>${escapeHtml(asset.model)}</strong>
+            <p>${escapeHtml(asset.prompt)}</p>
+          </div>
+          <button
+            class="secondary-button"
+            type="button"
+            data-storyboard-image-shot="${escapeHtml(selectedShot.id)}"
+            data-storyboard-image-asset="${escapeHtml(asset.id)}"
+            data-linked="${linked ? "true" : "false"}"
+          >
+            ${linked ? "解除关联" : "关联到选中镜头"}
+          </button>
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function renderProductionEditor(production) {
   const shotFields = production.shot_plan
     .map(
@@ -1545,6 +1864,7 @@ function renderDeliveryReview(script, production) {
         ${renderDeliveryRow("Brief", manifest.brief)}
         ${renderDeliveryRow("Review", manifest.review)}
         ${renderDeliveryRow("Review Tasks", manifest.review_tasks)}
+        ${renderDeliveryRow("Storyboard", manifest.storyboard)}
         ${renderDeliveryRow("Activity", manifest.activity)}
       </div>
     </div>
@@ -1589,6 +1909,15 @@ function deliveryManifest(project, script, production, report) {
     : "Not reviewed";
   const reviewTasks = reviewActionSummary(project.review_notes?.action_items || []);
   const agentOutputs = project.nodes.filter((node) => node.output).length;
+  const storyboard = state.storyboard;
+  const storyboardShots = storyboard?.has_completed_result ? storyboard.shots || [] : [];
+  const approvedStoryboardShots = storyboardShots.filter(
+    (shot) => shot.review_status === "approved",
+  ).length;
+  const promptReadyShots = storyboardShots.filter((shot) => shot.prompt_ready).length;
+  const storyboardSummary = storyboard?.has_completed_result
+    ? `${storyboardShots.length} shots · ${approvedStoryboardShots} approved · ${promptReadyShots} prompt ready`
+    : "Not generated";
   return {
     filename: exportFileName(project),
     title: project.title || "Untitled",
@@ -1598,11 +1927,13 @@ function deliveryManifest(project, script, production, report) {
     brief: briefSummary(project.brief),
     review,
     review_tasks: reviewTasks,
+    storyboard: storyboardSummary,
     activity: `${state.activity.length} timeline events`,
     metrics: [
       { label: "Scenes", value: String(scenes.length) },
       { label: "Beats", value: String(beats.length) },
       { label: "Shots", value: String(shots.length) },
+      { label: "Storyboard", value: String(storyboardShots.length) },
       { label: "Shot Time", value: formatDuration(totalShotSeconds) },
     ],
     sections: [
@@ -1610,6 +1941,8 @@ function deliveryManifest(project, script, production, report) {
       `script: ${beats.length} beats, ${scenes.length} scenes`,
       `production_pack: ${shots.length} shots`,
       `image_assets: ${(project.image_assets || []).length}`,
+      `storyboard: ${storyboardSummary}`,
+      `storyboard_image_links: ${storyboard?.image_links?.length || 0}`,
       `review_notes: ${review}`,
       `review_tasks: ${reviewTasks}`,
       `agent_outputs: ${agentOutputs} nodes`,
