@@ -50,6 +50,15 @@ SMOKE_BRIEF = {
     "must_include": "前三秒出现异常素材；结尾保留下一次倒计时。",
 }
 
+SMOKE_ACCEPTANCE_PRODUCT_REQUIREMENT = (
+    "`docs/next-product-requirement.md` Real Model End-to-End Acceptance Gate, "
+    "updated 2026-07-10 CST"
+)
+
+SMOKE_ACCEPTANCE_ARCHITECTURE_TASK = (
+    "`docs/development-task-breakdown.md` Task 1 强化真实 smoke 发布门禁"
+)
+
 
 class SmokeStageError(RuntimeError):
     pass
@@ -350,10 +359,10 @@ def write_smoke_result_markdown(result: dict[str, Any], path: Path) -> None:
                 f"- Run started at: `{result['run_started_at']}`",
                 f"- Run finished at: `{result['run_finished_at']}`",
                 f"- Overall status: `{result['overall_status']}`",
-                "- Product requirement: `docs/next-product-requirement.md` "
-                "Real Model Storyboard Acceptance, updated 2026-07-10 CST",
-                "- Architecture task: `docs/development-task-breakdown.md` Task 1 "
-                "real `.env` end-to-end smoke runner",
+                f"- Product requirement: {SMOKE_ACCEPTANCE_PRODUCT_REQUIREMENT}",
+                f"- Architecture task: {SMOKE_ACCEPTANCE_ARCHITECTURE_TASK}",
+                "- Acceptance scope: `smoke-real-model-storyboard` covers agent, Storyboard, "
+                "project image and export package stages in one real end-to-end gate.",
                 f"- Database path: `{result['database_path']}`",
                 f"- Project ID: `{result['project_id']}`",
                 f"- Language model: `{result['models']['language']}`",
@@ -377,6 +386,13 @@ def write_smoke_result_markdown(result: dict[str, Any], path: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def smoke_gate_completed(result: dict[str, Any]) -> bool:
+    if result.get("overall_status") != "completed":
+        return False
+    stages = {stage.get("stage"): stage for stage in result.get("stages", [])}
+    return all(stages.get(stage, {}).get("status") == "completed" for stage in SMOKE_STAGES)
 
 
 def sanitize_smoke_error(error: BaseException | str) -> str:

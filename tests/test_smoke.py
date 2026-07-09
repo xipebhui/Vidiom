@@ -5,10 +5,14 @@ from pathlib import Path
 from typing import Any
 
 from test_schema import valid_payload
+from typer.testing import CliRunner
 
+import vidiom.cli as cli_module
 from vidiom.config import Settings
 from vidiom.providers import ImageGenerationResult
-from vidiom.smoke import run_real_model_storyboard_smoke
+from vidiom.smoke import run_real_model_storyboard_smoke, smoke_gate_completed
+
+runner = CliRunner()
 
 
 def test_real_model_smoke_runner_records_success(tmp_path: Path) -> None:
@@ -115,6 +119,128 @@ def test_real_model_smoke_runner_records_keyboard_interrupt(
     assert "`interrupted`" in result_path.read_text(encoding="utf-8")
 
 
+def test_real_model_smoke_runner_records_provider_503_as_failed_and_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HM_BASE_URL", "https://provider.test/v1")
+    monkeypatch.setenv("HM_LLM_APIKEY", "secret-language-key")
+
+    result = run_real_model_storyboard_smoke(
+        result_path=tmp_path / "result.md",
+        database_path=tmp_path / "smoke.sqlite3",
+        settings=make_settings(tmp_path),
+        language_client=FakeSmokeLanguageClient(
+            agent_error=RuntimeError(
+                "Error code: 503 - {'error': {'message': 'system cpu overloaded', "
+                "'code': 'system_cpu_overloaded'}, 'key': 'secret-language-key'}"
+            )
+        ),
+        image_client=FakeImageClient(),
+    )
+
+    stages = {stage["stage"]: stage for stage in result["stages"]}
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert result["overall_status"] == "failed"
+    assert stages["agent_project"]["status"] == "failed"
+    assert stages["storyboard_generation"]["status"] == "incomplete"
+    assert stages["project_image_generation"]["status"] == "incomplete"
+    assert stages["export_package"]["status"] == "incomplete"
+    assert "503" in stages["agent_project"]["error_message"]
+    assert "system_cpu_overloaded" in stages["agent_project"]["error_message"]
+    assert "secret-language-key" not in serialized
+
+
+def test_smoke_gate_completed_requires_all_core_stages_completed() -> None:
+    result = make_cli_smoke_result(
+        "completed",
+        {
+            "agent_project": "completed",
+            "storyboard_generation": "completed",
+            "project_image_generation": "incomplete",
+            "export_package": "completed",
+        },
+    )
+
+    assert smoke_gate_completed(result) is False
+
+
+def test_smoke_real_model_storyboard_cli_returns_zero_for_completed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    result_path = tmp_path / "result.md"
+
+    def fake_run_real_model_storyboard_smoke(
+        *,
+        result_path: Path,
+        database_path: Path | None,
+    ) -> dict[str, Any]:
+        result_path.write_text("completed smoke", encoding="utf-8")
+        return make_cli_smoke_result(
+            "completed",
+            {
+                "agent_project": "completed",
+                "storyboard_generation": "completed",
+                "project_image_generation": "completed",
+                "export_package": "completed",
+            },
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_real_model_storyboard_smoke",
+        fake_run_real_model_storyboard_smoke,
+    )
+
+    response = runner.invoke(
+        cli_module.app,
+        ["smoke-real-model-storyboard", "--result-path", str(result_path)],
+    )
+
+    assert response.exit_code == 0
+    assert "status=completed" in response.output
+    assert result_path.read_text(encoding="utf-8") == "completed smoke"
+
+
+def test_smoke_real_model_storyboard_cli_returns_nonzero_for_failed_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    result_path = tmp_path / "result.md"
+
+    def fake_run_real_model_storyboard_smoke(
+        *,
+        result_path: Path,
+        database_path: Path | None,
+    ) -> dict[str, Any]:
+        result_path.write_text("failed smoke", encoding="utf-8")
+        return make_cli_smoke_result(
+            "failed",
+            {
+                "agent_project": "failed",
+                "storyboard_generation": "incomplete",
+                "project_image_generation": "incomplete",
+                "export_package": "incomplete",
+            },
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_real_model_storyboard_smoke",
+        fake_run_real_model_storyboard_smoke,
+    )
+
+    response = runner.invoke(
+        cli_module.app,
+        ["smoke-real-model-storyboard", "--result-path", str(result_path)],
+    )
+
+    assert response.exit_code == 1
+    assert "status=failed" in response.output
+    assert result_path.read_text(encoding="utf-8") == "failed smoke"
+
+
 def make_settings(tmp_path: Path) -> Settings:
     return Settings(
         database_path=tmp_path / "unused.sqlite3",
@@ -133,9 +259,11 @@ class FakeSmokeLanguageClient:
         *,
         storyboard_payload: dict[str, Any] | None = None,
         interrupt_storyboard: bool = False,
+        agent_error: Exception | None = None,
     ) -> None:
         self.storyboard_payload = storyboard_payload or valid_storyboard_payload()
         self.interrupt_storyboard = interrupt_storyboard
+        self.agent_error = agent_error
 
     def generate_json(
         self,
@@ -147,6 +275,8 @@ class FakeSmokeLanguageClient:
         schema: dict[str, Any],
     ) -> dict[str, Any]:
         if schema_name == "premise":
+            if self.agent_error is not None:
+                raise self.agent_error
             return {
                 "one_sentence_pitch": "剪辑师被未来素材拖进救援。",
                 "genre": "悬疑亲情",
@@ -292,5 +422,35 @@ def valid_storyboard_payload() -> dict[str, Any]:
                 "asset_name": "剪辑室",
                 "role": "location",
             },
+        ],
+    }
+
+
+def make_cli_smoke_result(
+    overall_status: str,
+    stage_statuses: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "run_started_at": "2026-07-10T00:00:00+00:00",
+        "run_finished_at": "2026-07-10T00:00:01+00:00",
+        "duration_seconds": 1.0,
+        "overall_status": overall_status,
+        "project_id": 1,
+        "database_path": "/tmp/smoke.sqlite3",
+        "result_path": "docs/real-model-smoke-result.md",
+        "models": {"language": "gpt-5.5", "image": "gpt-image-2"},
+        "stages": [
+            {
+                "stage": stage,
+                "status": status,
+                "started_at": None,
+                "finished_at": None,
+                "duration_seconds": None,
+                "model": None,
+                "summary": "",
+                "error_message": None,
+                "details": {},
+            }
+            for stage, status in stage_statuses.items()
         ],
     }

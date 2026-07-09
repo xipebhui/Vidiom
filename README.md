@@ -133,6 +133,16 @@ vidiom scheduler
 
 ## 迭代记录
 
+### 2026-07-10 04:56 CST - 强化真实 smoke 发布门禁
+
+- 对应需求文档条目：`docs/next-product-requirement.md` 的 “Real Model End-to-End Acceptance Gate”，要求真实 `gpt-5.5` agent、真实 `gpt-5.5` Storyboard、`gpt-image-2` 项目图像和导出包在同一轮真实 smoke 中全部 completed，任一 failed、interrupted 或 incomplete 均不能视为真实模型接入完成。
+- 对应架构师任务：`docs/development-task-breakdown.md` 的首要执行项 Task 1 “强化真实 smoke 发布门禁”，收口 CLI 门禁、结果文件元数据、provider 503/错误失败语义和 README/验收文件一致性。
+- 本轮开发内容：新增 `smoke_gate_completed()`，要求 `overall_status=completed` 且 agent_project、storyboard_generation、project_image_generation、export_package 四段全部 completed 才算通过；`vidiom smoke-real-model-storyboard` 现在在未通过门禁时返回非零退出码，但仍先写入 `docs/real-model-smoke-result.md`；更新 smoke 结果 markdown 的 Product requirement、Architecture task 和端到端验收范围文案；新增 CLI completed/failed 退出码测试、四段 completed 判定测试和 provider 503 脱敏失败测试。
+- 用户价值：自动化、用户和下一轮产品/架构任务现在能把真实 smoke 当作发布门禁读取；provider 503、长时间等待后中断或后续阶段 incomplete 不会被命令层误判为发布通过，也不会覆盖成历史成功。
+- 涉及文件/模块：`src/vidiom/smoke.py`、`src/vidiom/cli.py`、`tests/test_smoke.py`、`docs/real-model-smoke-result.md`、`README.md`。
+- 验证命令与结果：`.venv/bin/python -m pytest tests/test_smoke.py` 通过，9 passed；`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，67 passed，1 个 StarletteDeprecationWarning 来自依赖；`node --check src/vidiom/static/app.js` 通过；`git diff --check` 通过；真实 `.env` smoke 已执行 `.venv/bin/vidiom smoke-real-model-storyboard --result-path docs/real-model-smoke-result.md`，命令按门禁返回非零，最新结果为 interrupted：agent_project 使用 `gpt-5.5` 完成 5/5 节点，storyboard_generation 使用 `gpt-5.5` 等待 291.208 秒后被本轮自动化中断，project_image_generation 和 export_package 均为 incomplete。
+- 仍待处理事项：最新真实 smoke 仍未 completed，不能视为真实模型接入完成；上一轮 503 失败记录和本轮 interrupted 记录共同说明真实 provider 调用窗口仍是发布风险。调用超时、自动重试、排队等待或验收窗口策略仍需用户确认后才能进入实现。
+
 ### 2026-07-10 03:54 CST - 建立真实模型 Storyboard smoke 验收记录
 
 - 对应需求文档条目：`docs/next-product-requirement.md` 的 “Real Model Storyboard Acceptance”，覆盖真实 `gpt-5.5` agent、真实 `gpt-5.5` Storyboard、`gpt-image-2` 图像回归、导出包校验，以及长耗时/失败/中断不可写成成功的验收标准。

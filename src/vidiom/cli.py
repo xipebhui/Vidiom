@@ -14,7 +14,7 @@ from .generator import OpenAIShortDramaGenerator
 from .ingest import read_jsonl
 from .pipeline import run_once
 from .scheduler import start_scheduler
-from .smoke import DEFAULT_SMOKE_RESULT_PATH, run_real_model_storyboard_smoke
+from .smoke import DEFAULT_SMOKE_RESULT_PATH, run_real_model_storyboard_smoke, smoke_gate_completed
 from .storage import Storage
 
 load_dotenv()
@@ -120,6 +120,8 @@ def smoke_real_model_storyboard(
         f"status={result['overall_status']} "
         f"result={result_path}"
     )
+    if not smoke_gate_completed(result):
+        raise typer.Exit(code=1)
 
 
 @app.command("scheduler")
