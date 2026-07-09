@@ -774,6 +774,9 @@ def test_export_project_api_includes_completed_storyboard_deliverable(tmp_path) 
     assert storyboard["storyboard"]["status"] == "completed"
     assert storyboard["shots"][0]["sequence_index"] == 1
     assert storyboard["assets"][0]["asset_type"] == "character"
+    assert storyboard["readiness_summary"]["shot_count"] == 2
+    assert storyboard["shot_blockers"][0]["shot_id"] == storyboard["shots"][0]["id"]
+    assert storyboard["shots"][0]["blockers"] == storyboard["shot_blockers"][0]["blockers"]
 
 
 def test_storyboard_api_gets_not_started_and_generates_completed_payload(
@@ -821,6 +824,15 @@ def test_storyboard_api_gets_not_started_and_generates_completed_payload(
 
     assert initial_response.status_code == 200
     assert initial_response.json()["storyboard"]["generation_status"] == "not_started"
+    assert initial_response.json()["readiness_summary"] == {
+        "shot_count": 0,
+        "approved_count": 0,
+        "needs_changes_count": 0,
+        "pending_count": 0,
+        "prompt_not_ready_count": 0,
+        "shots_with_blockers_count": 0,
+        "ready_for_media_generation": False,
+    }
     assert generate_response.status_code == 200
     assert refreshed_response.status_code == 200
     storyboard = refreshed_response.json()
@@ -828,6 +840,10 @@ def test_storyboard_api_gets_not_started_and_generates_completed_payload(
     assert storyboard["storyboard"]["last_completed_model"] == "gpt-5.5"
     assert storyboard["has_completed_result"] is True
     assert len(storyboard["shots"]) == 2
+    assert storyboard["readiness_summary"]["shot_count"] == 2
+    assert storyboard["readiness_summary"]["pending_count"] == 1
+    assert storyboard["readiness_summary"]["needs_changes_count"] == 1
+    assert "review_pending" in {blocker["code"] for blocker in storyboard["shots"][0]["blockers"]}
 
 
 def test_storyboard_generate_rejects_draft_project(tmp_path) -> None:
@@ -1107,6 +1123,7 @@ def test_storyboard_shot_editing_api_persists_refresh_and_export(tmp_path) -> No
     updated = update_response.json()["storyboard"]["shots"][0]
     assert updated["visual_description"] == "林澈把异常素材放大到街口车牌。"
     assert updated["prompt_ready"] is False
+    assert "prompt_not_ready" in {blocker["code"] for blocker in updated["blockers"]}
     assert create_response.status_code == 200
     assert [shot["sequence_index"] for shot in create_response.json()["storyboard"]["shots"]] == [
         1,
@@ -1129,6 +1146,8 @@ def test_storyboard_shot_editing_api_persists_refresh_and_export(tmp_path) -> No
     exported = export_response.json()["deliverables"]["storyboard"]
     assert [shot["sequence_index"] for shot in exported["shots"]] == [1, 2]
     assert exported["shots"][1]["beat_ref"] == "追查地点"
+    assert exported["readiness_summary"] == refreshed["readiness_summary"]
+    assert exported["shot_blockers"] == refreshed["shot_blockers"]
 
 
 def test_storyboard_shot_editing_api_rejects_invalid_or_missing_storyboard(

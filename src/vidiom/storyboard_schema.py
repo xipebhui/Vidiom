@@ -143,6 +143,212 @@ def validate_storyboard_payload(payload: dict[str, Any]) -> None:
         _clean_required_string(relationship.get("role"), "relationship role")
 
 
+def derive_storyboard_readiness(
+    *,
+    shots: list[dict[str, Any]],
+    assets: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    image_links: list[dict[str, Any]],
+) -> dict[str, Any]:
+    del image_links
+    relationships_by_shot: dict[int, list[dict[str, Any]]] = {}
+    for relationship in relationships:
+        relationships_by_shot.setdefault(int(relationship["shot_id"]), []).append(relationship)
+
+    asset_names_by_type = {
+        asset_type: {
+            _normalized_name(asset["name"])
+            for asset in assets
+            if asset.get("asset_type") == asset_type
+        }
+        for asset_type in STORYBOARD_ASSET_TYPES
+    }
+    shot_blockers = []
+    for shot in shots:
+        blockers = _storyboard_shot_blockers(
+            shot=shot,
+            relationships=relationships_by_shot.get(int(shot["id"]), []),
+            asset_names_by_type=asset_names_by_type,
+        )
+        shot_blockers.append(
+            {
+                "shot_id": shot["id"],
+                "sequence_index": shot["sequence_index"],
+                "blockers": blockers,
+            }
+        )
+
+    shot_count = len(shots)
+    shots_with_blockers_count = sum(1 for item in shot_blockers if item["blockers"])
+    summary = {
+        "shot_count": shot_count,
+        "approved_count": sum(1 for shot in shots if shot.get("review_status") == "approved"),
+        "needs_changes_count": sum(
+            1 for shot in shots if shot.get("review_status") == "needs_changes"
+        ),
+        "pending_count": sum(1 for shot in shots if shot.get("review_status") == "pending"),
+        "prompt_not_ready_count": sum(1 for shot in shots if not shot.get("prompt_ready")),
+        "shots_with_blockers_count": shots_with_blockers_count,
+        "ready_for_media_generation": shot_count > 0 and shots_with_blockers_count == 0,
+    }
+    return {"readiness_summary": summary, "shot_blockers": shot_blockers}
+
+
+def _storyboard_shot_blockers(
+    *,
+    shot: dict[str, Any],
+    relationships: list[dict[str, Any]],
+    asset_names_by_type: dict[str, set[str]],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    review_status = shot.get("review_status")
+    if review_status == "pending":
+        blockers.append(
+            _blocker(
+                "review_pending",
+                "review_status",
+                "Shot has not been reviewed or approved.",
+            )
+        )
+    elif review_status == "needs_changes":
+        blockers.append(
+            _blocker(
+                "review_needs_changes",
+                "review_status",
+                "Shot is marked as needing changes.",
+            )
+        )
+    elif review_status != "approved":
+        blockers.append(
+            _blocker(
+                "review_not_approved",
+                "review_status",
+                "Shot review status is not approved.",
+            )
+        )
+
+    if not shot.get("prompt_ready"):
+        blockers.append(
+            _blocker("prompt_not_ready", "prompt_ready", "Shot prompt is not marked ready.")
+        )
+    if not _clean_optional_string(shot.get("visual_description")):
+        blockers.append(
+            _blocker(
+                "missing_visual_description",
+                "visual_description",
+                "Shot visual description is missing.",
+            )
+        )
+    if not _clean_optional_string(shot.get("image_prompt")):
+        blockers.append(
+            _blocker("missing_image_prompt", "image_prompt", "Shot image prompt is missing.")
+        )
+
+    duration = shot.get("duration_seconds")
+    if not isinstance(duration, int) or duration < 1 or duration > 120:
+        blockers.append(
+            _blocker(
+                "invalid_duration_seconds",
+                "duration_seconds",
+                "Shot duration must be between 1 and 120 seconds.",
+            )
+        )
+
+    scene_name = _clean_optional_string(shot.get("scene"))
+    scene_relationships = [
+        relationship for relationship in relationships if relationship.get("asset_type") == "scene"
+    ]
+    if not scene_name:
+        blockers.append(_blocker("missing_scene", "scene", "Shot scene is missing."))
+    elif not scene_relationships:
+        blockers.append(
+            _blocker(
+                "missing_scene_asset_relationship",
+                "relationships",
+                "Shot has no linked scene asset.",
+            )
+        )
+    else:
+        scene_relation_names = {
+            _normalized_name(relationship["asset_name"]) for relationship in scene_relationships
+        }
+        if (
+            _normalized_name(scene_name) in asset_names_by_type["scene"]
+            and _normalized_name(scene_name) not in scene_relation_names
+        ):
+            blockers.append(
+                _blocker(
+                    "scene_relationship_review_needed",
+                    "relationships",
+                    "Shot scene field and linked scene assets need review.",
+                )
+            )
+
+    _append_asset_field_relationship_blocker(
+        blockers=blockers,
+        shot=shot,
+        relationships=relationships,
+        asset_type="character",
+        field="characters",
+        code="character_relationship_review_needed",
+        message="Shot character field and linked character assets need review.",
+        asset_names_by_type=asset_names_by_type,
+    )
+    _append_asset_field_relationship_blocker(
+        blockers=blockers,
+        shot=shot,
+        relationships=relationships,
+        asset_type="prop",
+        field="props",
+        code="prop_relationship_review_needed",
+        message="Shot prop field and linked prop assets need review.",
+        asset_names_by_type=asset_names_by_type,
+    )
+    return blockers
+
+
+def _append_asset_field_relationship_blocker(
+    *,
+    blockers: list[dict[str, Any]],
+    shot: dict[str, Any],
+    relationships: list[dict[str, Any]],
+    asset_type: str,
+    field: str,
+    code: str,
+    message: str,
+    asset_names_by_type: dict[str, set[str]],
+) -> None:
+    field_names = {
+        _normalized_name(item)
+        for item in shot.get(field, [])
+        if isinstance(item, str) and item.strip()
+    }
+    relationship_names = {
+        _normalized_name(relationship["asset_name"])
+        for relationship in relationships
+        if relationship.get("asset_type") == asset_type
+    }
+    known_field_names = field_names & asset_names_by_type[asset_type]
+    if known_field_names != relationship_names:
+        blockers.append(_blocker(code, "relationships", message))
+
+
+def _blocker(code: str, field: str, message: str) -> dict[str, str]:
+    return {"code": code, "field": field, "message": message}
+
+
+def _clean_optional_string(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _normalized_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().casefold()
+
+
 def _validate_shot(shot: dict[str, Any]) -> None:
     required = {
         "sequence_index",

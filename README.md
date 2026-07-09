@@ -21,6 +21,7 @@ Vidiom 是一个从“一句话”生成短剧的 agent 画布产品。用户输
 - 完成项目可在 Review 面板直接编辑拍摄包：视觉风格、场景、道具、剪辑备注和镜头计划会保存到成片导出包
 - 完成项目可在 Review 面板的故事板页触发真实 `gpt-5.5` Storyboard 生成，查看生成状态、失败错误、结构化 shots、项目内角色/场景/道具资产和图像关联
 - Storyboard 生成会区分最新生成尝试与最后一次成功结果；本次失败时不会清空旧 shots，也不会把旧结果伪装成本次成功
+- Storyboard API 和导出包会返回准备度摘要与每个 shot 的可解释阻塞项，帮助定位未确认、需修改、prompt 未准备或资产关系需复核的镜头
 - 完成项目可在画布节点上创建修订草稿，保留上游 agent 输出并只重跑所选节点及下游
 - 修订草稿会继承源项目的节点级生成指令，便于针对脚本对白、节拍结构或拍摄包要求做定向重跑
 - 运行 Agent 会立即进入后台生成，画布、进度条和 Timeline 会自动刷新节点状态
@@ -132,6 +133,16 @@ vidiom scheduler
 生成成品以 JSON 保存，便于后续接入分镜、视频合成、审核、人审后台或发布系统。
 
 ## 迭代记录
+
+### 2026-07-10 07:48 CST - 建立 Storyboard 准备度事实源
+
+- 对应需求文档条目：`docs/next-product-requirement.md` 的 “Storyboard Readiness and Asset Review Workspace”，本轮落实准备度验收中的 shot 总数、已确认数量、需修改数量、未确认数量、prompt 未准备数量、有阻塞项数量、per-shot blockers 和导出包一致性。
+- 对应架构师任务：`docs/development-task-breakdown.md` 的首要执行项 Task 1 “建立 Storyboard 准备度摘要与阻塞项事实源”，要求先把 readiness summary 和 blockers 放到后端事实源，再继续资产 CRUD、关系编辑、图像关联增强和前端生产台。
+- 本轮开发内容：新增 `derive_storyboard_readiness()` 纯派生 helper；`storage.get_project_storyboard()` 返回 `readiness_summary`、顶层 `shot_blockers` 和每个 shot 的 `blockers`；未开始 Storyboard 的 API 返回空 readiness 结构；导出包复用同一 Storyboard 对象，包含与 API 一致的 readiness summary 和 per-shot blockers。阻塞项覆盖未审核、需修改、prompt 未准备、画面描述缺失、图像提示词缺失、时长异常、scene 缺失、缺少 scene 资产关系，以及 characters/props 字段与已知资产关系需要复核。
+- 用户价值：用户和后续前端工作区现在能直接判断 Storyboard 是否具备进入媒体生成前的上游条件，并定位哪些镜头需要审核、补提示词或复核角色/场景/道具关系；导出包也保留同一份准备度事实，避免界面和交付 JSON 分裂。
+- 涉及文件/模块：`src/vidiom/storyboard_schema.py`、`src/vidiom/storage.py`、`src/vidiom/web.py`、`tests/test_storyboard.py`、`tests/test_web.py`、`README.md`。
+- 验证命令与结果：`.venv/bin/python -m pytest tests/test_storyboard.py tests/test_web.py` 通过，51 passed，1 个 StarletteDeprecationWarning 来自依赖；`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，79 passed，1 个 StarletteDeprecationWarning 来自依赖；`node --check src/vidiom/static/app.js` 通过；`git diff --check` 通过。
+- 仍待处理事项：本轮严格完成架构 Task 1，尚未实现 Task 2 资产 CRUD API 与事务、Task 3 shot-asset 关系编辑、Task 4 项目图像 link type/解除关联增强和 Task 5 前端 Storyboard 可编辑生产台；下一轮应继续由产品/架构师评估这些剩余验收项，尤其是资产/关系变化后的 prompt ready 失效与前端状态筛选体验。
 
 ### 2026-07-10 06:51 CST - 建立 Storyboard shot 编辑事务与 API 边界
 

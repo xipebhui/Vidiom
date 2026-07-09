@@ -9,7 +9,7 @@ from test_schema import valid_payload
 from vidiom.canvas import create_canvas_project
 from vidiom.storage import Storage
 from vidiom.storyboard import StoryboardContextBuilder, generate_project_storyboard
-from vidiom.storyboard_schema import validate_storyboard_payload
+from vidiom.storyboard_schema import derive_storyboard_readiness, validate_storyboard_payload
 
 
 def test_storyboard_migration_creates_tables_and_indexes(tmp_path: Path) -> None:
@@ -315,7 +315,156 @@ def test_storyboard_export_includes_shots_assets_relations_and_image_links(
     assert exported_storyboard["assets"][0]["asset_type"] == "character"
     assert exported_storyboard["relationships"][0]["asset_name"] == "林澈"
     assert exported_storyboard["image_links"][0]["image_asset"]["id"] == image_id
+    assert exported_storyboard["readiness_summary"] == storyboard["readiness_summary"]
+    assert exported_storyboard["shot_blockers"] == storyboard["shot_blockers"]
     assert package["deliverables"]["image_assets"][0]["id"] == image_id
+
+
+def test_storyboard_readiness_helper_counts_blockers_and_review_states() -> None:
+    shots = [
+        {
+            "id": 10,
+            "sequence_index": 1,
+            "review_status": "approved",
+            "characters": ["林澈"],
+            "scene": "剪辑室",
+            "props": ["手机"],
+            "visual_description": "林澈盯着屏幕。",
+            "image_prompt": "竖屏电影感，剪辑室。",
+            "duration_seconds": 8,
+            "prompt_ready": True,
+        },
+        {
+            "id": 11,
+            "sequence_index": 2,
+            "review_status": "pending",
+            "characters": ["林澈"],
+            "scene": "",
+            "props": ["手机"],
+            "visual_description": " ",
+            "image_prompt": "",
+            "duration_seconds": 0,
+            "prompt_ready": False,
+        },
+        {
+            "id": 12,
+            "sequence_index": 3,
+            "review_status": "needs_changes",
+            "characters": ["林澈"],
+            "scene": "剪辑室",
+            "props": ["手机"],
+            "visual_description": "手机来电盖住事故画面。",
+            "image_prompt": "竖屏电影感，手机来电。",
+            "duration_seconds": 6,
+            "prompt_ready": True,
+        },
+    ]
+    assets = [
+        {"id": 1, "asset_type": "character", "name": "林澈"},
+        {"id": 2, "asset_type": "scene", "name": "剪辑室"},
+        {"id": 3, "asset_type": "prop", "name": "手机"},
+    ]
+    relationships = [
+        {
+            "shot_id": 10,
+            "shot_sequence_index": 1,
+            "asset_id": 1,
+            "asset_type": "character",
+            "asset_name": "林澈",
+            "role": "featured_character",
+        },
+        {
+            "shot_id": 10,
+            "shot_sequence_index": 1,
+            "asset_id": 2,
+            "asset_type": "scene",
+            "asset_name": "剪辑室",
+            "role": "location",
+        },
+        {
+            "shot_id": 10,
+            "shot_sequence_index": 1,
+            "asset_id": 3,
+            "asset_type": "prop",
+            "asset_name": "手机",
+            "role": "key_prop",
+        },
+        {
+            "shot_id": 12,
+            "shot_sequence_index": 3,
+            "asset_id": 2,
+            "asset_type": "scene",
+            "asset_name": "剪辑室",
+            "role": "location",
+        },
+    ]
+
+    readiness = derive_storyboard_readiness(
+        shots=shots,
+        assets=assets,
+        relationships=relationships,
+        image_links=[],
+    )
+
+    assert readiness["readiness_summary"] == {
+        "shot_count": 3,
+        "approved_count": 1,
+        "needs_changes_count": 1,
+        "pending_count": 1,
+        "prompt_not_ready_count": 1,
+        "shots_with_blockers_count": 2,
+        "ready_for_media_generation": False,
+    }
+    blockers_by_sequence = {
+        item["sequence_index"]: {blocker["code"] for blocker in item["blockers"]}
+        for item in readiness["shot_blockers"]
+    }
+    assert blockers_by_sequence[1] == set()
+    assert {
+        "review_pending",
+        "prompt_not_ready",
+        "missing_visual_description",
+        "missing_image_prompt",
+        "invalid_duration_seconds",
+        "missing_scene",
+        "character_relationship_review_needed",
+        "prop_relationship_review_needed",
+    } <= blockers_by_sequence[2]
+    assert {
+        "review_needs_changes",
+        "character_relationship_review_needed",
+        "prop_relationship_review_needed",
+    } <= blockers_by_sequence[3]
+
+
+def test_storyboard_response_includes_readiness_summary_and_shot_blockers(
+    tmp_path: Path,
+) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+
+    assert storyboard["readiness_summary"] == {
+        "shot_count": 2,
+        "approved_count": 0,
+        "needs_changes_count": 1,
+        "pending_count": 1,
+        "prompt_not_ready_count": 0,
+        "shots_with_blockers_count": 2,
+        "ready_for_media_generation": False,
+    }
+    assert "blockers" in storyboard["shots"][0]
+    assert storyboard["shot_blockers"][0]["blockers"] == storyboard["shots"][0]["blockers"]
+    first_codes = {blocker["code"] for blocker in storyboard["shots"][0]["blockers"]}
+    second_codes = {blocker["code"] for blocker in storyboard["shots"][1]["blockers"]}
+    assert "review_pending" in first_codes
+    assert "review_needs_changes" in second_codes
+    assert "missing_scene_asset_relationship" in second_codes
+    assert "character_relationship_review_needed" in second_codes
 
 
 def test_storyboard_image_link_delete_preserves_project_image_asset(

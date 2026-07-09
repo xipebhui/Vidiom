@@ -14,6 +14,7 @@ from .storyboard_schema import (
     STORYBOARD_IMAGE_LINK_TYPES,
     STORYBOARD_REVIEW_STATUSES,
     STORYBOARD_STATUSES,
+    derive_storyboard_readiness,
 )
 
 STORYBOARD_SHOT_EDITABLE_FIELDS = {
@@ -1067,12 +1068,30 @@ class Storage:
                 """,
                 (storyboard_row["id"],),
             ).fetchall()
+        shots = [_storyboard_shot_row(row) for row in shot_rows]
+        assets = [_story_asset_row(row) for row in asset_rows]
+        relationships = [_storyboard_relationship_row(row) for row in relationship_rows]
+        image_links = [_storyboard_image_link_row(row) for row in image_link_rows]
+        readiness = derive_storyboard_readiness(
+            shots=shots,
+            assets=assets,
+            relationships=relationships,
+            image_links=image_links,
+        )
+        blockers_by_shot_id = {
+            item["shot_id"]: item["blockers"] for item in readiness["shot_blockers"]
+        }
+        for shot in shots:
+            shot["blockers"] = blockers_by_shot_id.get(shot["id"], [])
+
         return {
             "storyboard": _storyboard_row(storyboard_row).__dict__,
-            "shots": [_storyboard_shot_row(row) for row in shot_rows],
-            "assets": [_story_asset_row(row) for row in asset_rows],
-            "relationships": [_storyboard_relationship_row(row) for row in relationship_rows],
-            "image_links": [_storyboard_image_link_row(row) for row in image_link_rows],
+            "shots": shots,
+            "assets": assets,
+            "relationships": relationships,
+            "image_links": image_links,
+            "readiness_summary": readiness["readiness_summary"],
+            "shot_blockers": readiness["shot_blockers"],
             "has_completed_result": storyboard_row["last_completed_at"] is not None
             and len(shot_rows) > 0,
             "latest_attempt_failed": storyboard_row["generation_status"] == "failed",
