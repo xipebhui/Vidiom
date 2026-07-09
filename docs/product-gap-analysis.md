@@ -1,52 +1,98 @@
 # Product Gap Analysis
 
-## Current Priority
+更新时间：2026-07-10 CST
 
-The most important immediate gap is real model integration. Vidiom already presents an agent canvas workflow, but the next iteration must ensure the runtime uses the configured production model provider for both language and image generation.
+## 本轮产品判断
 
-## LibTV Reference Capability
+真实模型接入已经从“最高优先级缺口”进入“必须持续回归的基础能力”。仓库最新提交、README 迭代记录、`docs/model-provider-integration.md`、Provider/API/Storage/UI 测试均显示：
 
-LibTV combines an infinite canvas, agent-like nodes, story/script decomposition, image generation, video generation, image tools, video tools, audio tools, asset management, and a director stage. A key part of that experience is that nodes create real media or structured creative artifacts through connected models.
+- 语言 agent 已固定调用 OpenAI-compatible `gpt-5.5`。
+- 项目图像生成已固定调用 OpenAI-compatible `gpt-image-2`。
+- 两类模型均使用 `HM_BASE_URL`，并区分 `HM_LLM_APIKEY` 与 `HM_IMG_APIKEY`。
+- 缺少模型配置时会进入可见失败状态，不产生假成功。
+- README 记录了真实 `.env` smoke test：agent 项目完成 5/5 节点，图像资产 completed 并返回 base64 图像。
 
-## Vidiom Current State
+因此，本轮产品需求可以从“模型接入”切换到 LibTV 对齐的下一层：把已生成的脚本和第一张图像资产组织成可编辑、可批量扩展的故事板生产线。
 
-Observed from the repository:
+## LibTV 参考能力
 
-- Vidiom has a Studio UI with project creation, agent canvas, node inspector, review panels, project export, pause/resume, revision drafts, and run timeline.
-- Vidiom has language-agent code paths for Premise, Character, Beat, Script, and Production nodes.
-- Vidiom has an older `OpenAIShortDramaGenerator` path for batch generation.
-- Vidiom has no documented image model integration and no visible Studio image-generation workflow.
-- `.env` contains OpenAI-compatible provider configuration via `HM_BASE_URL`, `HM_LLM_APIKEY`, and `HM_IMG_APIKEY`.
+LibTV 的核心不是单点生成器，而是 AI 影视创作工作台。参考文档和 `tmp-image/` 抽样截图显示，LibTV 以无限画布承载文本、图片、视频、音频和脚本节点，通过连线、资产、历史和工具栏把生成任务组织为完整生产流程。
 
-## Gap: Real Model Runtime
+与 Vidiom 下一阶段最相关的 LibTV 能力包括：
 
-Vidiom must use the configured provider instead of any fake or incomplete generation path when running the product.
+- 脚本/故事板节点：将剧本拆成 shot、角色、场景、道具和提示词。
+- shot 编辑：支持检查、改写、排序、新增、删除和标记。
+- 资产化管理：角色、场景、道具可独立维护，并同步到相关 shot。
+- 提示词合成：把剧情、角色、场景、道具和风格整理为后续图像/视频生成 prompt。
+- 批量分镜图：从已确认的 shot 范围创建图像生成任务。
+- 视频生产链路：分镜图后续可接入视频片段、音频和合成。
 
-Required target:
+## Vidiom 当前已完成能力
 
-- Language agent runtime calls `gpt-5.5`.
-- Image generation runtime calls `gpt-image-2`.
-- Both use `HM_BASE_URL`.
-- Language calls use `HM_LLM_APIKEY`.
-- Image calls use `HM_IMG_APIKEY`.
-- Runtime outputs are persisted and visible to the user.
-- Runtime failures are visible in project/node state.
+Vidiom 已经具备短剧 agent 工作流的基础闭环：
 
-## Gap: Image Foundation
+- Studio Web 可创建项目、保存创作 Brief、运行 agent 画布、查看节点和 Timeline。
+- Agent 流程覆盖 Premise、Character、Beat、Script、Production。
+- 节点级生成指令、修订草稿、暂停/继续、失败重置、Review 编辑和 JSON 导出已存在。
+- 完成项目可人工编辑脚本和拍摄包，并保存审阅备注、发布任务和交付清单。
+- 真实模型接入已完成：语言 agent 使用 `gpt-5.5`，项目图像生成使用 `gpt-image-2`。
+- Studio 已有图像页，用户可为项目输入 prompt 并生成一张可验证图像资产。
 
-LibTV provides extensive image capabilities, including image nodes, image generation, style references, image editing, storyboard generation, multi-angle, lighting, panorama, annotation, and image grouping.
+## 主要产品差距
 
-Vidiom should not attempt all of these at once. The next practical step is to add a narrow image-generation foundation:
+### P0：故事板与 shot 资产化缺口
 
-- A provider client for `gpt-image-2`.
-- A backend endpoint to request image generation.
-- Persistence for generated image metadata.
-- A Studio surface to trigger generation and inspect the result.
+Vidiom 当前能生成完整脚本和拍摄包，但缺少 LibTV 式“脚本到分镜生产线”：
 
-This foundation enables future image nodes, storyboard images, character cards, shot thumbnails, and style references.
+- 没有把脚本拆成独立可编辑的 shot 列表。
+- 没有面向 shot 的角色、场景、道具、画面描述、动作、镜头、时长和提示词字段。
+- 图像生成仍是项目级单次 prompt，未与脚本 shot 绑定。
+- 用户无法选择部分 shot 批量生成分镜图。
+- 生成图像资产没有成为故事板条目的一部分，难以进入后续视频生成与合成。
 
-## Next Development Priority
+用户价值影响：用户虽然能得到短剧文本和一张图像，但还不能像 LibTV 那样审阅每个镜头、维护角色和场景一致性，也无法把内容推进到批量素材生产。
 
-Implement model provider integration first. Do not start broader LibTV parity work until the agent can call `gpt-5.5` and the app can generate at least one real image asset with `gpt-image-2`.
+### P1：无限画布与节点系统差距
 
-See `docs/model-provider-integration.md` and `docs/next-product-function-spec.md`.
+Vidiom 的画布目前是固定 agent 流程。LibTV 支持自由新建文本、图片、视频、音频、脚本节点，拖入素材、连线、复用、打组和保存工作流。
+
+用户价值影响：Vidiom 更像结构化 agent 审阅台，还不是自由组织素材和生成任务的影视工作台。
+
+### P1：资产/历史/项目管理差距
+
+Vidiom 已有项目列表、activity 和导出包，但缺少 LibTV 左侧资产栏、历史记录、素材复用、跨项目资产库和画布级操作回溯。
+
+用户价值影响：长项目和多版本生产时，用户难以沉淀角色、场景、风格和分镜资产。
+
+### P2：图像工具差距
+
+Vidiom 只有第一步项目图像生成。LibTV 覆盖图像编辑、高清、扩图、重绘、擦除、抠图、全景、多角度、打光、九宫格、标注、旋转镜像和分镜组。
+
+用户价值影响：Vidiom 暂时无法让用户修正或扩展图像结果，也无法围绕角色一致性和镜头连续性做可控生成。
+
+### P2：视频、音频和导演台差距
+
+Vidiom 尚未具备视频生成、视频剪辑、视频合成、音频生成/提取/变速、音视频分离、导演台 3D 构图、主体库、运镜控制和合规素材库。
+
+用户价值影响：Vidiom 还停留在“短剧文本与首张视觉资产”，距离“可生成并合成视频成片”仍有明显距离。
+
+## 风险
+
+- 如果下一步直接进入视频或复杂图像工具，会绕过故事板这一承接层，导致生成资产无法稳定绑定剧情和镜头。
+- 如果只继续增强单次项目图像生成，用户仍无法形成批量镜头生产流程。
+- 如果故事板字段过少，后续图像、视频、音频和导演台都缺少可复用上下文。
+- 如果模型接入缺少持续回归，后续故事板和图像能力可能在真实 provider 上不可验收。
+- 当前缺少 `docs/architecture-control-plan.md` 和 `docs/development-task-breakdown.md`，产品需求需要明确交给架构师补齐架构方案和开发拆解。
+
+## 优先级结论
+
+下一步产品需求：**脚本到故事板 shot 资产化与分镜图生成准备**。
+
+该需求是模型接入之后最短的 LibTV 对齐路径：继续利用 `gpt-5.5` 生成结构化 shot，利用已接入的 `gpt-image-2` 作为后续分镜图生成基础，但本轮产品重点是让用户能审阅和管理故事板，而不是立即追求完整视频、导演台或图像工具套件。
+
+架构师下一轮应读取：
+
+- `docs/product-gap-analysis.md`
+- `docs/next-product-requirement.md`
+- `docs/model-provider-integration.md`
+- `docs/libtv-product-function-description.md`
