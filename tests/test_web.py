@@ -34,7 +34,10 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderRunProgress" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "async function duplicateProject" in app_js
+    assert "async function reviseProjectFromNode" in app_js
     assert "async function resetProject" in app_js
+    assert "function renderRevisionAction" in app_js
+    assert "data-revise-node" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
 
@@ -522,6 +525,153 @@ def test_duplicate_project_api_creates_editable_draft_copy(tmp_path) -> None:
     assert project["nodes"][0]["key"] == "seed"
     assert project["nodes"][0]["output"]["brief"]["tone"] == "强钩子"
     assert [node["status"] for node in project["nodes"][1:]] == ["pending"] * 5
+
+
+def test_revise_project_api_creates_partial_rerun_draft(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(
+        storage,
+        "一个剪辑师发现素材里藏着未来事故。",
+        {"duration_minutes": 5, "aspect_ratio": "9:16 vertical"},
+    )
+    storage.complete_canvas_node(project_id, "premise", premise_output())
+    storage.complete_canvas_node(project_id, "characters", characters_output())
+    storage.complete_canvas_node(project_id, "beats", beats_output())
+    storage.complete_canvas_node(project_id, "script", valid_payload())
+    storage.complete_canvas_node(project_id, "production", production_output())
+    storage.update_project_title(project_id, "倒计时素材")
+    storage.update_project_status(project_id, "completed")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.post(f"/api/projects/{project_id}/revise", json={"start_node": "script"})
+        source_response = client.post(
+            f"/api/projects/{project_id}/revise", json={"start_node": "seed"}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    project = response.json()["project"]
+    nodes = {node["key"]: node for node in project["nodes"]}
+    assert project["id"] != project_id
+    assert project["status"] == "draft"
+    assert project["title"] == "倒计时素材 Script Revision"
+    assert project["brief"]["aspect_ratio"] == "9:16 vertical"
+    assert nodes["premise"]["status"] == "completed"
+    assert nodes["characters"]["status"] == "completed"
+    assert nodes["beats"]["status"] == "completed"
+    assert nodes["beats"]["output"]["episode_title"] == "倒计时素材"
+    assert nodes["script"]["status"] == "pending"
+    assert nodes["script"]["output"] is None
+    assert nodes["production"]["status"] == "pending"
+    assert nodes["production"]["output"] is None
+    assert response.json()["progress"] == {
+        "completed": 3,
+        "total": 5,
+        "active_key": None,
+        "active_title": None,
+        "failed_key": None,
+        "failed_title": None,
+    }
+    assert source_response.status_code == 422
+
+
+def test_revise_project_api_rejects_non_completed_project(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.post(f"/api/projects/{project_id}/revise", json={"start_node": "script"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only completed projects can be revised."
+
+
+def premise_output() -> dict:
+    return {
+        "one_sentence_pitch": "剪辑师被未来素材拖进救援。",
+        "genre": "悬疑亲情",
+        "target_audience": "18-35 岁短剧用户",
+        "emotional_hook": "错过报警的人必须补上选择。",
+        "story_promise": "每个素材细节都会变成救人的线索。",
+        "risk_flags": [],
+    }
+
+
+def characters_output() -> dict:
+    return {
+        "protagonist": {
+            "name": "林澈",
+            "age": 28,
+            "desire": "准时交片",
+            "wound": "曾逃避报警",
+            "choice": "公开客户素材救人",
+        },
+        "pressure": {
+            "name": "周岚",
+            "form": "客户",
+            "threat": "要求删除关键素材",
+            "human_reason": "她害怕再次失去女儿",
+        },
+        "relationship_map": ["林澈欠周岚真相", "周岚隐瞒女儿身份", "素材连接事故现场"],
+        "character_arcs": ["逃避到承担", "控制到求助", "交易到信任"],
+    }
+
+
+def beats_output() -> dict:
+    return {
+        "episode_title": "倒计时素材",
+        "logline": "剪辑师发现素材预告事故，必须在截稿前救人。",
+        "beats": [
+            {"index": 1, "beat": "异常素材", "screen_purpose": "抓住观众"},
+            {"index": 2, "beat": "删除要求", "screen_purpose": "制造压力"},
+            {"index": 3, "beat": "追查地点", "screen_purpose": "推进行动"},
+            {"index": 4, "beat": "身份反转", "screen_purpose": "加深情感"},
+            {"index": 5, "beat": "公开视频", "screen_purpose": "完成选择"},
+            {"index": 6, "beat": "报警回声", "screen_purpose": "留下余味"},
+        ],
+        "reversal": "事故对象是客户女儿。",
+        "cliffhanger": "素材末尾出现下一次倒计时。",
+    }
 
 
 def production_output() -> dict:

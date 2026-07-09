@@ -269,6 +269,29 @@ async function duplicateProject() {
   }
 }
 
+async function reviseProjectFromNode(startNode) {
+  if (!state.project || state.project.status !== "completed") return;
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}/revise`, {
+      method: "POST",
+      body: JSON.stringify({ start_node: startNode }),
+    });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    state.selectedKey = startNode;
+    resetProjectFilters();
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function resetProject() {
   if (!state.project || state.project.status !== "failed") return;
 
@@ -408,8 +431,10 @@ function renderInspector() {
     return;
   }
 
+  const revisionAction = renderRevisionAction(node);
   const output = node.output ? JSON.stringify(node.output, null, 2) : "";
   el.inspectorBody.innerHTML = `
+    ${revisionAction}
     <div class="kv">
       <div class="kv-row">
         <div class="kv-key">Node</div>
@@ -430,6 +455,10 @@ function renderInspector() {
       </div>
     </div>
   `;
+  const reviseButton = el.inspectorBody.querySelector("[data-revise-node]");
+  if (reviseButton) {
+    reviseButton.addEventListener("click", () => reviseProjectFromNode(reviseButton.dataset.reviseNode));
+  }
 }
 
 function renderScript() {
@@ -671,6 +700,17 @@ function renderBriefFields(brief = {}) {
 function renderOption(value, label, selectedValue) {
   const selected = String(selectedValue || "") === value ? " selected" : "";
   return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`;
+}
+
+function renderRevisionAction(node) {
+  if (state.project?.status !== "completed" || node.kind !== "agent") return "";
+  return `
+    <div class="node-actions">
+      <button class="secondary-button full-width" type="button" data-revise-node="${escapeHtml(node.key)}">
+        从此节点修订
+      </button>
+    </div>
+  `;
 }
 
 function briefFromForm(container) {

@@ -179,14 +179,15 @@ textarea:focus {
 }
 
 .primary-button,
+.secondary-button,
 .icon-button {
   height: 38px;
-  border: 0;
   border-radius: 8px;
   font-weight: 800;
 }
 
 .primary-button {
+  border: 0;
   color: #fff;
   background: var(--teal);
   padding: 0 16px;
@@ -196,13 +197,25 @@ textarea:focus {
   background: var(--teal-dark);
 }
 
+.secondary-button {
+  border: 1px solid var(--line);
+  color: var(--teal);
+  background: rgba(20, 125, 117, 0.08);
+  padding: 0 16px;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: var(--teal);
+  background: rgba(20, 125, 117, 0.13);
+}
+
 .icon-button {
+  border: 1px solid var(--line);
   width: 38px;
   display: grid;
   place-items: center;
   background: var(--surface-2);
   color: var(--ink);
-  border: 1px solid var(--line);
 }
 
 .full-width {
@@ -434,6 +447,10 @@ textarea:focus {
 .inspector-body,
 .script-preview {
   min-height: 160px;
+}
+
+.node-actions {
+  margin-bottom: 12px;
 }
 
 .review-tabs {

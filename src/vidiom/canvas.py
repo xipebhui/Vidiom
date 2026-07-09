@@ -162,6 +162,33 @@ def create_canvas_project(
     return project_id
 
 
+def create_revision_project(
+    storage: Storage, source_project_id: int, start_node_key: str
+) -> int:
+    source = storage.get_project(source_project_id)
+    if source["status"] != "completed":
+        raise RuntimeError("Only completed projects can be revised.")
+
+    step_keys = [step.key for step in AGENT_STEPS]
+    if start_node_key not in step_keys:
+        raise ValueError("Revision start node must be an agent node.")
+
+    revision_id = create_canvas_project(
+        storage=storage,
+        seed_text=str(source["seed_text"]),
+        brief=source["brief"],
+    )
+    source_nodes = {node["key"]: node for node in source["nodes"]}
+    start_index = step_keys.index(start_node_key)
+    for step in AGENT_STEPS[:start_index]:
+        source_node = source_nodes[step.key]
+        if source_node["status"] != "completed" or source_node["output"] is None:
+            raise RuntimeError(f"Source node {step.title} is not ready for revision.")
+        storage.complete_canvas_node(revision_id, step.key, source_node["output"])
+
+    return revision_id
+
+
 def run_canvas_project(storage: Storage, project_id: int, agent: CanvasAgent) -> dict[str, Any]:
     project = storage.get_project(project_id)
     seed_text = str(project["seed_text"])

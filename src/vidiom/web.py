@@ -12,7 +12,12 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .canvas import OpenAICanvasAgent, create_canvas_project, run_canvas_project
+from .canvas import (
+    OpenAICanvasAgent,
+    create_canvas_project,
+    create_revision_project,
+    run_canvas_project,
+)
 from .config import Settings
 from .storage import Storage
 
@@ -47,6 +52,11 @@ class RunProjectResponse(BaseModel):
 
 
 ProjectStatusFilter = Literal["draft", "running", "completed", "failed"]
+RevisionStartNode = Literal["premise", "characters", "beats", "script", "production"]
+
+
+class ReviseProjectRequest(BaseModel):
+    start_node: RevisionStartNode
 
 
 def get_settings() -> Settings:
@@ -143,6 +153,26 @@ def duplicate_project(
     if duplicate_title is not None:
         storage.update_project_title(duplicate_id, duplicate_title)
     return _project_response(storage, duplicate_id)
+
+
+@app.post("/api/projects/{project_id}/revise")
+def revise_project(
+    project_id: int,
+    request: ReviseProjectRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        source = storage.get_project(project_id)
+        revision_id = create_revision_project(storage, project_id, request.start_node)
+        storage.update_project_title(
+            revision_id,
+            _revision_title(source["title"], request.start_node),
+        )
+        return _project_response(storage, revision_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/reset")
@@ -271,4 +301,11 @@ def _duplicate_title(title: str | None) -> str | None:
     if not clean_title:
         return None
     suffix = " Copy"
+    return f"{clean_title[: 120 - len(suffix)]}{suffix}"
+
+
+def _revision_title(title: str | None, start_node: str) -> str:
+    clean_title = title.strip() if title else "Untitled"
+    label = start_node.replace("_", " ").title()
+    suffix = f" {label} Revision"
     return f"{clean_title[: 120 - len(suffix)]}{suffix}"
