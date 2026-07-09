@@ -429,6 +429,18 @@ textarea:focus {
   font-weight: 850;
 }
 
+.node-instruction-marker {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(45, 108, 223, 0.11);
+  color: var(--blue);
+  font-size: 10px;
+}
+
 .node-title {
   margin-top: 10px;
   font-size: 15px;
@@ -496,6 +508,22 @@ textarea:focus {
 
 .node-actions {
   margin-bottom: 12px;
+}
+
+.node-instruction-editor {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.node-instruction-editor label {
+  margin-bottom: 0;
+}
+
+.node-instruction-editor textarea {
+  min-height: 92px;
 }
 
 .review-actions {

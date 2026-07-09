@@ -58,6 +58,7 @@ class RunProjectResponse(BaseModel):
 
 ProjectStatusFilter = Literal["draft", "running", "paused", "completed", "failed"]
 RevisionStartNode = Literal["premise", "characters", "beats", "script", "production"]
+AgentNodeKey = Literal["premise", "characters", "beats", "script", "production"]
 ReleaseStatus = Literal["ready", "needs_edits", "blocked"]
 ReviewActionStatus = Literal["open", "done", "blocked"]
 
@@ -68,6 +69,10 @@ class ReviseProjectRequest(BaseModel):
 
 class UpdateScriptRequest(BaseModel):
     script: dict
+
+
+class UpdateNodeInstructionsRequest(BaseModel):
+    guidance: str = Field(default="", max_length=1000)
 
 
 class ProductionShotRequest(BaseModel):
@@ -276,6 +281,26 @@ def update_project_script(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/projects/{project_id}/nodes/{node_key}/instructions")
+def update_node_instructions(
+    project_id: int,
+    node_key: AgentNodeKey,
+    request: UpdateNodeInstructionsRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storage.update_canvas_node_instructions(
+            project_id,
+            node_key,
+            _node_instructions_payload(request),
+        )
+        return _project_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -498,6 +523,13 @@ def _review_notes_payload(request: UpdateReviewNotesRequest) -> dict:
     if not payload["summary"]:
         raise ValueError("Review summary cannot be empty.")
     return payload
+
+
+def _node_instructions_payload(request: UpdateNodeInstructionsRequest) -> dict | None:
+    guidance = request.guidance.strip()
+    if not guidance:
+        return None
+    return {"guidance": guidance}
 
 
 def _clean_string_list(values: list[str]) -> list[str]:

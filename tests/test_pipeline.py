@@ -140,6 +140,11 @@ def test_run_canvas_project_persists_review_outputs(tmp_path: Path) -> None:
         "must_include": "前三秒出现异常素材",
     }
     project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。", brief)
+    storage.update_canvas_node_instructions(
+        project_id,
+        "script",
+        {"guidance": "对白更短，每场保留一个强反转。"},
+    )
     agent = FakeCanvasAgent()
 
     project = run_canvas_project(storage, project_id, agent)
@@ -150,6 +155,13 @@ def test_run_canvas_project_persists_review_outputs(tmp_path: Path) -> None:
     assert project["brief"]["aspect_ratio"] == "9:16 vertical"
     assert nodes["seed"]["output"]["brief"]["must_include"] == "前三秒出现异常素材"
     assert agent.contexts[0][1]["creative_brief"]["duration_minutes"] == 5
+    script_context = next(context for key, context in agent.contexts if key == "script")
+    production_context = next(context for key, context in agent.contexts if key == "production")
+    assert script_context["current_node_instructions"]["guidance"] == (
+        "对白更短，每场保留一个强反转。"
+    )
+    assert "current_node_instructions" not in production_context
+    assert nodes["script"]["instructions"]["guidance"] == "对白更短，每场保留一个强反转。"
     assert nodes["script"]["output"]["scenes"][0]["dialogue"][0]["speaker"] == "林澈"
     assert nodes["production"]["output"]["shot_plan"][0]["shot"] == "屏幕特写"
 

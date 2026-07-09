@@ -112,6 +112,7 @@ class Storage:
                     y INTEGER NOT NULL,
                     status TEXT NOT NULL,
                     output_json TEXT,
+                    instruction_json TEXT,
                     error TEXT,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(project_id, node_key),
@@ -149,6 +150,11 @@ class Storage:
                 conn.execute("ALTER TABLE projects ADD COLUMN brief_json TEXT")
             if "review_notes_json" not in project_columns:
                 conn.execute("ALTER TABLE projects ADD COLUMN review_notes_json TEXT")
+            node_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(canvas_nodes)").fetchall()
+            }
+            if "instruction_json" not in node_columns:
+                conn.execute("ALTER TABLE canvas_nodes ADD COLUMN instruction_json TEXT")
 
     def add_inspiration(
         self, text: str, source_type: str = "manual", source_ref: str | None = None
@@ -324,15 +330,16 @@ class Storage:
         y: int,
         status: str,
         output: dict[str, Any] | None,
+        instructions: dict[str, Any] | None = None,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO canvas_nodes(
                     project_id, node_key, title, kind, x, y, status,
-                    output_json, error, updated_at
+                    output_json, instruction_json, error, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
                 """,
                 (
                     project_id,
@@ -343,6 +350,7 @@ class Storage:
                     y,
                     status,
                     _json_or_none(output),
+                    _json_or_none(instructions),
                     utc_now(),
                 ),
             )
@@ -425,7 +433,7 @@ class Storage:
                 """
                 SELECT
                     project_id, node_key, title, kind, x, y,
-                    status, output_json, error, updated_at
+                    status, output_json, instruction_json, error, updated_at
                 FROM canvas_nodes
                 WHERE project_id = ?
                 ORDER BY x, y, node_key
@@ -514,6 +522,11 @@ class Storage:
                 "seed_text": project["seed_text"],
                 "brief": project["brief"],
                 "review_notes": project["review_notes"],
+                "agent_instructions": {
+                    key: node["instructions"]
+                    for key, node in nodes.items()
+                    if node["instructions"] is not None
+                },
                 "created_at": project["created_at"],
                 "updated_at": project["updated_at"],
             },
@@ -536,7 +549,7 @@ class Storage:
                 """
                 SELECT
                     project_id, node_key, title, kind, x, y,
-                    status, output_json, error, updated_at
+                    status, output_json, instruction_json, error, updated_at
                 FROM canvas_nodes
                 WHERE project_id = ? AND node_key = ?
                 """,
@@ -666,6 +679,68 @@ class Storage:
                     """,
                     (now, project_id),
                 )
+
+    def update_canvas_node_instructions(
+        self, project_id: int, node_key: str, instructions: dict[str, Any] | None
+    ) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, status
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+
+            node = conn.execute(
+                """
+                SELECT node_key, title, kind, status
+                FROM canvas_nodes
+                WHERE project_id = ? AND node_key = ?
+                """,
+                (project_id, node_key),
+            ).fetchone()
+            if node is None:
+                raise LookupError(f"Node {node_key!r} was not found in project {project_id}.")
+            if node["kind"] != "agent":
+                raise RuntimeError("Only agent nodes can have generation instructions.")
+            if project["status"] == "running" and node["status"] != "pending":
+                raise RuntimeError("Only pending nodes can be edited while a project is running.")
+
+            conn.execute(
+                """
+                UPDATE canvas_nodes
+                SET instruction_json = ?, updated_at = ?
+                WHERE project_id = ? AND node_key = ?
+                """,
+                (_json_or_none(instructions), now, project_id, node_key),
+            )
+            conn.execute(
+                """
+                UPDATE projects
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (now, project_id),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="node_instruction",
+                title="Node instructions saved",
+                status="completed",
+                description=_node_instruction_description(str(node["title"]), instructions),
+                details={
+                    "node_key": node_key,
+                    "node_title": node["title"],
+                    "instructions": instructions,
+                },
+                created_at=now,
+            )
 
     def reset_failed_project(self, project_id: int) -> None:
         now = utc_now()
@@ -1014,6 +1089,7 @@ def _node_row(row: sqlite3.Row) -> dict[str, Any]:
         "y": row["y"],
         "status": row["status"],
         "output": json.loads(output_json) if output_json else None,
+        "instructions": _json_from_column(row["instruction_json"]),
         "error": row["error"],
         "updated_at": row["updated_at"],
     }
@@ -1074,6 +1150,15 @@ def _insert_project_event(
             created_at,
         ),
     )
+
+
+def _node_instruction_description(
+    node_title: str, instructions: dict[str, Any] | None
+) -> str:
+    guidance = str((instructions or {}).get("guidance", "")).strip()
+    if not guidance:
+        return f"Cleared custom guidance for {node_title}."
+    return f"Saved custom guidance for {node_title}: {guidance[:180]}"
 
 
 def _status_event(previous_status: str, status: str, last_error: str | None) -> dict[str, Any]:

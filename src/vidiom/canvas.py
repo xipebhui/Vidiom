@@ -107,9 +107,15 @@ class OpenAICanvasAgent:
         from openai import OpenAI
 
         client = OpenAI(api_key=require_openai_api_key())
+        guidance = str((context.get("current_node_instructions") or {}).get("guidance", "")).strip()
+        step_instruction = step.instruction
+        if guidance:
+            step_instruction = (
+                f"{step_instruction}\n\nUser guidance for this node:\n{guidance}"
+            )
         response = client.responses.create(
             model=self.model,
-            instructions=f"{SYSTEM_PROMPT}\n\n{step.instruction}",
+            instructions=f"{SYSTEM_PROMPT}\n\n{step_instruction}",
             input=json.dumps(
                 {"seed_text": seed_text, "previous_outputs": context},
                 ensure_ascii=False,
@@ -179,6 +185,10 @@ def create_revision_project(
         brief=source["brief"],
     )
     source_nodes = {node["key"]: node for node in source["nodes"]}
+    for step in AGENT_STEPS:
+        instructions = source_nodes[step.key].get("instructions")
+        if instructions is not None:
+            storage.update_canvas_node_instructions(revision_id, step.key, instructions)
     start_index = step_keys.index(start_node_key)
     for step in AGENT_STEPS[:start_index]:
         source_node = source_nodes[step.key]
@@ -210,7 +220,10 @@ def run_canvas_project(storage: Storage, project_id: int, agent: CanvasAgent) ->
                 continue
 
             storage.update_canvas_node_status(project_id, step.key, "running", None)
-            output = agent.generate_step(step, seed_text, context)
+            step_context = dict(context)
+            if current["instructions"] is not None:
+                step_context["current_node_instructions"] = current["instructions"]
+            output = agent.generate_step(step, seed_text, step_context)
             storage.complete_canvas_node(project_id, step.key, output)
             context[step.key] = output
 

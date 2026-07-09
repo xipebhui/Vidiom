@@ -379,6 +379,33 @@ async function saveReviewNotes(event) {
   }
 }
 
+async function saveNodeInstructions(event) {
+  event.preventDefault();
+  if (!state.project) return;
+
+  const form = event.currentTarget;
+  const nodeKey = form.dataset.nodeInstructions;
+  const guidance = form.querySelector("[name='guidance']").value.trim();
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}/nodes/${nodeKey}/instructions`, {
+      method: "PATCH",
+      body: JSON.stringify({ guidance }),
+    });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function downloadProjectExport() {
   if (!state.project || !projectCanExport(state.project)) return;
 
@@ -567,10 +594,13 @@ function renderCanvas() {
 function renderNode(node) {
   const selected = state.selectedKey === node.key ? " selected" : "";
   const statusClass = `status-${node.status}`;
+  const instructionMarker = node.instructions?.guidance
+    ? `<span class="node-instruction-marker" title="Custom guidance">Guide</span>`
+    : "";
   return `
     <button class="canvas-node${selected}" data-node-key="${node.key}" style="left:${node.x}px;top:${node.y}px">
       <div class="node-kind">
-        <span>${escapeHtml(node.kind)}</span>
+        <span>${escapeHtml(node.kind)}${instructionMarker}</span>
         <span class="status-pill ${statusClass}">${escapeHtml(node.status)}</span>
       </div>
       <div class="node-title">${escapeHtml(node.title)}</div>
@@ -609,9 +639,11 @@ function renderInspector() {
   }
 
   const revisionAction = renderRevisionAction(node);
+  const instructionEditor = renderNodeInstructionsEditor(node);
   const output = node.output ? JSON.stringify(node.output, null, 2) : "";
   el.inspectorBody.innerHTML = `
     ${revisionAction}
+    ${instructionEditor}
     <div class="kv">
       <div class="kv-row">
         <div class="kv-key">Node</div>
@@ -635,6 +667,10 @@ function renderInspector() {
   const reviseButton = el.inspectorBody.querySelector("[data-revise-node]");
   if (reviseButton) {
     reviseButton.addEventListener("click", () => reviseProjectFromNode(reviseButton.dataset.reviseNode));
+  }
+  const instructionForm = el.inspectorBody.querySelector("[data-node-instructions]");
+  if (instructionForm) {
+    instructionForm.addEventListener("submit", saveNodeInstructions);
   }
 }
 
@@ -1516,6 +1552,27 @@ function renderRevisionAction(node) {
         从此节点修订
       </button>
     </div>
+  `;
+}
+
+function renderNodeInstructionsEditor(node) {
+  if (node.kind !== "agent") return "";
+  const guidance = node.instructions?.guidance || "";
+  const disabled = state.project?.status === "running" && node.status !== "pending";
+  return `
+    <form class="node-instruction-editor" data-node-instructions="${escapeHtml(node.key)}">
+      <label for="nodeGuidance-${escapeHtml(node.key)}">Node Guidance</label>
+      <textarea
+        id="nodeGuidance-${escapeHtml(node.key)}"
+        name="guidance"
+        rows="4"
+        maxlength="1000"
+        ${disabled ? "disabled" : ""}
+      >${escapeHtml(guidance)}</textarea>
+      <button class="secondary-button full-width" type="submit" ${disabled ? "disabled" : ""}>
+        保存节点指令
+      </button>
+    </form>
   `;
 }
 

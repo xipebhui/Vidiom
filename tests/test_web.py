@@ -69,6 +69,11 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function reviewActionSummary" in app_js
     assert "data-review-action" in app_js
     assert "Review Tasks" in app_js
+    assert "async function saveNodeInstructions" in app_js
+    assert "function renderNodeInstructionsEditor" in app_js
+    assert "data-node-instructions" in app_js
+    assert "Node Guidance" in app_js
+    assert "/instructions" in app_js
     assert "/review-notes" in app_js
     assert "async function saveScriptEdits" in app_js
     assert "function renderScriptEditor" in app_js
@@ -299,6 +304,58 @@ def test_update_draft_project_api_clears_stale_agent_outputs(tmp_path) -> None:
     assert nodes["seed"]["output"]["text"] == "一个制片人在直播间看见消失主演的求救弹幕。"
     assert nodes["premise"]["status"] == "pending"
     assert nodes["premise"]["output"] is None
+
+
+def test_update_node_instructions_api_persists_agent_guidance(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}/nodes/script/instructions",
+            json={"guidance": "对白更短，每场保留一个强反转。"},
+        )
+        seed_response = client.patch(
+            f"/api/projects/{project_id}/nodes/seed/instructions",
+            json={"guidance": "无效"},
+        )
+        clear_response = client.patch(
+            f"/api/projects/{project_id}/nodes/script/instructions",
+            json={"guidance": "   "},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    nodes = {node["key"]: node for node in response.json()["project"]["nodes"]}
+    assert nodes["script"]["instructions"] == {
+        "guidance": "对白更短，每场保留一个强反转。"
+    }
+    activity = response.json()["activity"]
+    assert activity[-1]["type"] == "node_instruction"
+    assert activity[-1]["details"]["node_key"] == "script"
+    assert seed_response.status_code == 422
+    assert clear_response.status_code == 200
+    cleared_nodes = {node["key"]: node for node in clear_response.json()["project"]["nodes"]}
+    assert cleared_nodes["script"]["instructions"] is None
 
 
 def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
@@ -564,6 +621,11 @@ def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> N
     project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
     storage.complete_canvas_node(project_id, "script", valid_payload())
     storage.complete_canvas_node(project_id, "production", production_output())
+    storage.update_canvas_node_instructions(
+        project_id,
+        "script",
+        {"guidance": "对白更短，每场保留一个强反转。"},
+    )
     storage.update_project_title(project_id, "倒计时素材")
     storage.update_project_status(project_id, "completed")
 
@@ -584,6 +646,9 @@ def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> N
     body = response.json()
     assert body["project"]["title"] == "倒计时素材"
     assert body["project"]["brief"] is None
+    assert body["project"]["agent_instructions"]["script"]["guidance"] == (
+        "对白更短，每场保留一个强反转。"
+    )
     assert body["deliverables"]["script"]["title"] == "倒计时素材"
     assert body["deliverables"]["production_pack"]["shot_plan"][0]["shot"] == "屏幕特写"
     assert body["agent_outputs"]["seed"]["text"] == "一个剪辑师发现素材里藏着未来事故。"
@@ -1029,6 +1094,11 @@ def test_revise_project_api_creates_partial_rerun_draft(tmp_path) -> None:
     storage.complete_canvas_node(project_id, "beats", beats_output())
     storage.complete_canvas_node(project_id, "script", valid_payload())
     storage.complete_canvas_node(project_id, "production", production_output())
+    storage.update_canvas_node_instructions(
+        project_id,
+        "script",
+        {"guidance": "对白更短，每场保留一个强反转。"},
+    )
     storage.update_project_title(project_id, "倒计时素材")
     storage.update_project_status(project_id, "completed")
 
@@ -1056,6 +1126,7 @@ def test_revise_project_api_creates_partial_rerun_draft(tmp_path) -> None:
     assert nodes["beats"]["output"]["episode_title"] == "倒计时素材"
     assert nodes["script"]["status"] == "pending"
     assert nodes["script"]["output"] is None
+    assert nodes["script"]["instructions"]["guidance"] == "对白更短，每场保留一个强反转。"
     assert nodes["production"]["status"] == "pending"
     assert nodes["production"]["output"] is None
     assert response.json()["progress"] == {
