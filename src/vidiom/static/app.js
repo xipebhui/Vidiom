@@ -1,3 +1,15 @@
+const WORKSPACE_STORAGE_KEY = "vidiom.studio.workspace.v1";
+const REVIEW_TABS = new Set(["script", "characters", "production", "quality", "delivery"]);
+const NODE_KEYS = new Set(["seed", "premise", "characters", "beats", "script", "production"]);
+const PROJECT_STATUSES = new Set(["", "draft", "running", "paused", "completed", "failed"]);
+const AGENT_SEQUENCE = [
+  { key: "premise", title: "Premise Agent" },
+  { key: "characters", title: "Character Agent" },
+  { key: "beats", title: "Beat Agent" },
+  { key: "script", title: "Script Agent" },
+  { key: "production", title: "Production Agent" },
+];
+
 const state = {
   projects: [],
   project: null,
@@ -16,6 +28,7 @@ const state = {
     search: "",
     status: "",
   },
+  restoredProjectId: null,
   projectListRequestId: 0,
 };
 
@@ -58,10 +71,12 @@ el.projectStatusFilter.addEventListener("change", applyProjectFilters);
 el.reviewTabs.forEach((tab) => {
   tab.addEventListener("click", () => {
     state.reviewTab = tab.dataset.reviewTab;
+    saveWorkspaceState();
     renderScript();
   });
 });
 
+restoreWorkspaceState();
 loadProjects();
 
 function resetReviewEditors() {
@@ -95,7 +110,9 @@ async function loadProjects() {
       (project) => project.id === currentProjectId,
     );
     if (state.projects.length > 0 && (!state.project || !selectedProjectIsVisible)) {
-      await loadProject(state.projects[0].id);
+      const preferredProjectId = currentProjectId || state.restoredProjectId;
+      const preferredProject = state.projects.find((project) => project.id === preferredProjectId);
+      await loadProject((preferredProject || state.projects[0]).id);
       return;
     }
     if (state.projects.length === 0 && !selectedProjectIsVisible) {
@@ -104,6 +121,7 @@ async function loadProjects() {
       state.progress = null;
       state.runtime = null;
       state.selectedKey = "seed";
+      state.restoredProjectId = null;
       stopProjectPolling();
       render();
       return;
@@ -124,6 +142,7 @@ async function loadProject(projectId) {
     state.selectedKey = state.project.nodes.find((node) => node.key === state.selectedKey)
       ? state.selectedKey
       : "seed";
+    state.restoredProjectId = null;
     resetReviewEditors();
     render();
     syncProjectPolling();
@@ -165,6 +184,7 @@ async function createProject() {
 function applyProjectFilters() {
   state.projectFilters.search = el.projectSearch.value.trim();
   state.projectFilters.status = el.projectStatusFilter.value;
+  saveWorkspaceState();
   loadProjects();
 }
 
@@ -510,6 +530,7 @@ function render() {
   renderRunReadiness();
   renderScript();
   renderActivity();
+  saveWorkspaceState();
 }
 
 function renderHeader() {
@@ -546,6 +567,9 @@ function renderProjects() {
           <div class="project-row-seed">${escapeHtml(project.seed_text)}</div>
           <div class="project-row-progress">
             ${progress}
+          </div>
+          <div class="project-row-next">
+            ${escapeHtml(projectNextActionLabel(project))}
           </div>
           <div class="project-row-meta">
             <span>#${project.id}</span>
@@ -588,6 +612,7 @@ function renderCanvas() {
   el.nodeLayer.querySelectorAll(".canvas-node").forEach((node) => {
     node.addEventListener("click", () => {
       state.selectedKey = node.dataset.nodeKey;
+      saveWorkspaceState();
       render();
     });
   });
@@ -1920,6 +1945,40 @@ function progressLabel(project, progress) {
   return `${progress.completed}/${progress.total} · draft`;
 }
 
+function projectNextActionLabel(project) {
+  const progress = project.progress;
+  if (project.status === "failed") {
+    return progress.failed_title
+      ? `Next: reset or revise ${progress.failed_title}`
+      : "Next: reset failed run";
+  }
+  if (project.status === "running") {
+    return progress.active_title
+      ? `Now running: ${progress.active_title}`
+      : "Now running: starting agents";
+  }
+  if (project.status === "paused") {
+    return progress.active_title
+      ? `Next: wait for ${progress.active_title} to pause`
+      : "Next: continue agent run";
+  }
+  if (project.status === "completed") {
+    if (!project.review_notes) return "Next: review release checks";
+    return "Next: export deliverable package";
+  }
+  const nextNode = nextPendingAgent(project, progress);
+  if (nextNode && progress.completed > 0) {
+    return `Next: continue from ${nextNode.title}`;
+  }
+  return "Next: edit brief or run agents";
+}
+
+function nextPendingAgent(project, progress) {
+  const node = project.nodes?.find((item) => item.kind === "agent" && item.status !== "completed");
+  if (node) return node;
+  return AGENT_SEQUENCE[Math.min(progress.completed, AGENT_SEQUENCE.length - 1)];
+}
+
 function renderProjectRowProgress(project) {
   const progress = project.progress;
   const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
@@ -2003,6 +2062,43 @@ function activeNodeKey(progress) {
 
 function selectedNode() {
   return state.project?.nodes.find((node) => node.key === state.selectedKey);
+}
+
+function restoreWorkspaceState() {
+  const rawValue = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
+  if (!rawValue) return;
+
+  const saved = JSON.parse(rawValue);
+  if (Number.isInteger(saved.projectId)) {
+    state.restoredProjectId = saved.projectId;
+  }
+  if (typeof saved.selectedKey === "string" && NODE_KEYS.has(saved.selectedKey)) {
+    state.selectedKey = saved.selectedKey;
+  }
+  if (typeof saved.reviewTab === "string" && REVIEW_TABS.has(saved.reviewTab)) {
+    state.reviewTab = saved.reviewTab;
+  }
+  if (saved.filters) {
+    if (typeof saved.filters.search === "string") {
+      state.projectFilters.search = saved.filters.search;
+      el.projectSearch.value = saved.filters.search;
+    }
+    if (typeof saved.filters.status === "string" && PROJECT_STATUSES.has(saved.filters.status)) {
+      state.projectFilters.status = saved.filters.status;
+      el.projectStatusFilter.value = saved.filters.status;
+    }
+  }
+}
+
+function saveWorkspaceState() {
+  const payload = {
+    projectId: state.project?.id || state.restoredProjectId,
+    selectedKey: state.selectedKey,
+    reviewTab: state.reviewTab,
+    filters: state.projectFilters,
+    savedAt: new Date().toISOString(),
+  };
+  window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(payload));
 }
 
 function summaryForNode(node) {

@@ -35,6 +35,12 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderBriefFields" in app_js
     assert "function projectListQuery" in app_js
     assert "function applyProjectFilters" in app_js
+    assert "vidiom.studio.workspace.v1" in app_js
+    assert "function restoreWorkspaceState" in app_js
+    assert "function saveWorkspaceState" in app_js
+    assert "function projectNextActionLabel" in app_js
+    assert "function nextPendingAgent" in app_js
+    assert "project-row-next" in app_js
     assert "function renderProjectRowProgress" in app_js
     assert "function startProjectPolling" in app_js
     assert "function pollRunningProject" in app_js
