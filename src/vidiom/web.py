@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import quote
@@ -25,6 +27,7 @@ from .storage import Storage
 load_dotenv()
 
 STATIC_DIR = Path(__file__).parent / "static"
+logger = logging.getLogger(__name__)
 
 
 class CreativeBriefRequest(BaseModel):
@@ -50,6 +53,7 @@ class RunProjectResponse(BaseModel):
     project: dict
     activity: list[dict]
     progress: dict
+    runtime: dict
 
 
 ProjectStatusFilter = Literal["draft", "running", "paused", "completed", "failed"]
@@ -307,21 +311,26 @@ def run_project(
 
 def _project_response(storage: Storage, project_id: int) -> dict:
     project = storage.get_project(project_id)
+    activity = storage.get_project_activity(project_id)
     return {
         "project": project,
-        "activity": storage.get_project_activity(project_id),
+        "activity": activity,
         "progress": _project_progress(project),
+        "runtime": _project_runtime(project, activity),
     }
 
 
 def _run_project_job(database_path: Path, project_id: int, model: str) -> None:
     storage = Storage(database_path)
     storage.migrate()
-    run_canvas_project(
-        storage=storage,
-        project_id=project_id,
-        agent=OpenAICanvasAgent(model),
-    )
+    try:
+        run_canvas_project(
+            storage=storage,
+            project_id=project_id,
+            agent=OpenAICanvasAgent(model),
+        )
+    except Exception:
+        logger.exception("Canvas project %s background run failed.", project_id)
 
 
 def _project_progress(project: dict) -> dict:
@@ -337,6 +346,88 @@ def _project_progress(project: dict) -> dict:
         "failed_key": failed["key"] if failed is not None else None,
         "failed_title": failed["title"] if failed is not None else None,
     }
+
+
+def _project_runtime(project: dict, activity: list[dict]) -> dict:
+    now = datetime.now(UTC)
+    status_events = [
+        item
+        for item in activity
+        if item["type"] == "status_change" and item.get("details") is not None
+    ]
+    run_starts = [
+        item["occurred_at"]
+        for item in status_events
+        if item["details"].get("status") == "running"
+    ]
+    started_at = run_starts[-1] if run_starts else None
+    finished_at = (
+        project["updated_at"]
+        if project["status"] in {"completed", "failed", "paused"}
+        else None
+    )
+    elapsed_seconds = None
+    if started_at is not None:
+        end_at = now if project["status"] == "running" else _parse_timestamp(finished_at)
+        elapsed_seconds = max(0, round((end_at - _parse_timestamp(started_at)).total_seconds()))
+
+    active_node = _runtime_active_node(project, now)
+    last_activity = _last_activity(activity)
+    return {
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "elapsed_seconds": elapsed_seconds,
+        "active_node": active_node,
+        "last_activity": last_activity,
+    }
+
+
+def _runtime_active_node(project: dict, now: datetime) -> dict | None:
+    active = next(
+        (
+            node
+            for node in project["nodes"]
+            if node["kind"] == "agent" and node["status"] == "running"
+        ),
+        None,
+    )
+    if active is None:
+        return None
+    started_at = active["updated_at"]
+    return {
+        "key": active["key"],
+        "title": active["title"],
+        "started_at": started_at,
+        "elapsed_seconds": max(0, round((now - _parse_timestamp(started_at)).total_seconds())),
+    }
+
+
+def _last_activity(activity: list[dict]) -> dict | None:
+    if not activity:
+        return None
+    candidates = [
+        item
+        for item in activity
+        if not (item["type"] == "node" and item["status"] == "pending")
+    ]
+    if not candidates:
+        candidates = activity
+    _, latest = max(
+        enumerate(candidates),
+        key=lambda indexed: (_parse_timestamp(indexed[1]["occurred_at"]), indexed[0]),
+    )
+    return {
+        "type": latest["type"],
+        "title": latest["title"],
+        "status": latest["status"],
+        "occurred_at": latest["occurred_at"],
+    }
+
+
+def _parse_timestamp(value: str | None) -> datetime:
+    if value is None:
+        raise ValueError("Timestamp is required.")
+    return datetime.fromisoformat(value)
 
 
 def _brief_payload(brief: CreativeBriefRequest | None) -> dict | None:

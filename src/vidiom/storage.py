@@ -544,15 +544,39 @@ class Storage:
     def update_project_status(
         self, project_id: int, status: str, last_error: str | None = None
     ) -> None:
+        now = utc_now()
         with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, status
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+
             conn.execute(
                 """
                 UPDATE projects
                 SET status = ?, last_error = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (status, last_error, utc_now(), project_id),
+                (status, last_error, now, project_id),
             )
+            if project["status"] != status:
+                event = _status_event(project["status"], status, last_error)
+                _insert_project_event(
+                    conn=conn,
+                    project_id=project_id,
+                    event_type="status_change",
+                    title=event["title"],
+                    status=status,
+                    description=event["description"],
+                    details=event["details"],
+                    created_at=now,
+                )
 
     def update_project_title(self, project_id: int, title: str) -> None:
         with self.connect() as conn:
@@ -672,8 +696,20 @@ class Storage:
                 """,
                 (now, project_id),
             )
+            event = _status_event(project["status"], "draft", None)
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="status_change",
+                title=event["title"],
+                status="draft",
+                description=event["description"],
+                details=event["details"],
+                created_at=now,
+            )
 
     def pause_running_project(self, project_id: int) -> None:
+        now = utc_now()
         with self.connect() as conn:
             project = conn.execute(
                 """
@@ -694,7 +730,18 @@ class Storage:
                 SET status = 'paused', last_error = NULL, updated_at = ?
                 WHERE id = ?
                 """,
-                (utc_now(), project_id),
+                (now, project_id),
+            )
+            event = _status_event(project["status"], "paused", None)
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="status_change",
+                title=event["title"],
+                status="paused",
+                description=event["description"],
+                details=event["details"],
+                created_at=now,
             )
 
     def update_completed_project_script(self, project_id: int, script: dict[str, Any]) -> None:
@@ -953,6 +1000,56 @@ def _output_summary(output: dict[str, Any]) -> str:
     if "visual_style" in output:
         return str(output["visual_style"])
     return "Completed."
+
+
+def _insert_project_event(
+    conn: sqlite3.Connection,
+    project_id: int,
+    event_type: str,
+    title: str,
+    status: str,
+    description: str,
+    details: dict[str, Any] | None,
+    created_at: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO project_events(
+            project_id, event_type, title, status, description, details_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            project_id,
+            event_type,
+            title,
+            status,
+            description,
+            _json_or_none(details),
+            created_at,
+        ),
+    )
+
+
+def _status_event(previous_status: str, status: str, last_error: str | None) -> dict[str, Any]:
+    events = {
+        "running": ("Project run started", "Agent run is now active."),
+        "paused": ("Project paused", "Run will stop after the active agent node."),
+        "completed": ("Project completed", "All agent nodes completed."),
+        "failed": ("Project failed", (last_error or "Agent run failed.")[:2000]),
+        "draft": ("Project reset to draft", "Failed run was reset for editing."),
+    }
+    if status not in events:
+        raise ValueError(f"Unsupported project status: {status}")
+    title, description = events[status]
+    return {
+        "title": title,
+        "description": description,
+        "details": {
+            "previous_status": previous_status,
+            "status": status,
+        },
+    }
 
 
 def _script_edit_summary(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:

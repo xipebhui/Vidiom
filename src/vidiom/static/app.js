@@ -3,6 +3,7 @@ const state = {
   project: null,
   activity: [],
   progress: null,
+  runtime: null,
   selectedKey: "seed",
   reviewTab: "script",
   scriptEditing: false,
@@ -39,6 +40,7 @@ const el = {
   scriptPreview: document.querySelector("#scriptPreview"),
   reviewTabs: document.querySelectorAll(".review-tab"),
   activityTimeline: document.querySelector("#activityTimeline"),
+  runtimeSummary: document.querySelector("#runtimeSummary"),
   seedPanel: document.querySelector(".seed-panel"),
 };
 
@@ -97,6 +99,7 @@ async function loadProjects() {
       state.project = null;
       state.activity = [];
       state.progress = null;
+      state.runtime = null;
       state.selectedKey = "seed";
       stopProjectPolling();
       render();
@@ -114,6 +117,7 @@ async function loadProject(projectId) {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = state.project.nodes.find((node) => node.key === state.selectedKey)
       ? state.selectedKey
       : "seed";
@@ -141,6 +145,7 @@ async function createProject() {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = "seed";
     resetReviewEditors();
     el.seedText.value = "";
@@ -190,6 +195,7 @@ async function runProject() {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = activeNodeKey(state.progress) || "premise";
     resetReviewEditors();
     await loadProjects();
@@ -212,6 +218,7 @@ async function pauseProject() {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     resetReviewEditors();
     await loadProjects();
     render();
@@ -245,6 +252,7 @@ async function saveDraftEdits(event) {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = "seed";
     resetReviewEditors();
     await loadProjects();
@@ -279,6 +287,7 @@ async function saveScriptEdits(event) {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     resetReviewEditors();
     await loadProjects();
     render();
@@ -323,6 +332,7 @@ async function saveProductionEdits(event) {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     resetReviewEditors();
     await loadProjects();
     render();
@@ -369,6 +379,7 @@ async function duplicateProject() {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = "seed";
     resetReviewEditors();
     resetProjectFilters();
@@ -393,6 +404,7 @@ async function reviseProjectFromNode(startNode) {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = startNode;
     resetReviewEditors();
     resetProjectFilters();
@@ -414,6 +426,7 @@ async function resetProject() {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = activeNodeKey(state.progress) || "seed";
     resetReviewEditors();
     await loadProjects();
@@ -1253,6 +1266,7 @@ function linesFromTextarea(textarea) {
 }
 
 function renderActivity() {
+  renderRuntimeSummary();
   if (!state.project) {
     el.activityTimeline.innerHTML = `<div class="empty">No activity</div>`;
     return;
@@ -1263,6 +1277,45 @@ function renderActivity() {
   }
 
   el.activityTimeline.innerHTML = state.activity.map(renderActivityItem).join("");
+}
+
+function renderRuntimeSummary() {
+  if (!state.project) {
+    el.runtimeSummary.innerHTML = "";
+    return;
+  }
+
+  const runtime = state.runtime || {};
+  const started = runtime.started_at ? formatTime(runtime.started_at) : "Not started";
+  const elapsed =
+    runtime.elapsed_seconds === null || runtime.elapsed_seconds === undefined
+      ? "—"
+      : formatDuration(runtime.elapsed_seconds);
+  const active = runtime.active_node
+    ? `${runtime.active_node.title} · ${formatDuration(runtime.active_node.elapsed_seconds)}`
+    : "—";
+  const lastActivity = runtime.last_activity
+    ? `${runtime.last_activity.title} · ${formatTime(runtime.last_activity.occurred_at)}`
+    : "—";
+
+  el.runtimeSummary.innerHTML = `
+    <div class="runtime-card">
+      <span>Started</span>
+      <strong>${escapeHtml(started)}</strong>
+    </div>
+    <div class="runtime-card">
+      <span>Elapsed</span>
+      <strong>${escapeHtml(elapsed)}</strong>
+    </div>
+    <div class="runtime-card">
+      <span>Active Node</span>
+      <strong>${escapeHtml(active)}</strong>
+    </div>
+    <div class="runtime-card">
+      <span>Last Activity</span>
+      <strong>${escapeHtml(lastActivity)}</strong>
+    </div>
+  `;
 }
 
 function renderActivityItem(item) {
@@ -1282,7 +1335,11 @@ function renderActivityItem(item) {
 
 function renderRunProgress(project, progress) {
   if (!project || !progress || progress.total === 0) return "";
-  const label = progressLabel(project, progress);
+  const runtimeSuffix =
+    state.runtime?.elapsed_seconds === null || state.runtime?.elapsed_seconds === undefined
+      ? ""
+      : ` · ${formatDuration(state.runtime.elapsed_seconds)}`;
+  const label = `${progressLabel(project, progress)}${runtimeSuffix}`;
   const percent = Math.round((progress.completed / progress.total) * 100);
   return `
     <div class="progress-label">${escapeHtml(label)}</div>
@@ -1363,6 +1420,7 @@ async function pollRunningProject(projectId) {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
     state.selectedKey = activeNodeKey(state.progress) || state.selectedKey;
     render();
     if (state.project.status !== "running") {
@@ -1443,6 +1501,16 @@ function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = total % 60;
+  if (minutes < 1) return `${remainingSeconds}s`;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function projectCanExport(project) {

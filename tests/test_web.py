@@ -19,6 +19,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert 'id="resetProject"' in index_html
     assert 'id="pauseProject"' in index_html
     assert 'id="runProgress"' in index_html
+    assert 'id="runtimeSummary"' in index_html
     assert 'id="projectSearch"' in index_html
     assert 'id="projectStatusFilter"' in index_html
     assert '<option value="paused">Paused</option>' in index_html
@@ -36,6 +37,8 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function startProjectPolling" in app_js
     assert "function pollRunningProject" in app_js
     assert "function renderRunProgress" in app_js
+    assert "function renderRuntimeSummary" in app_js
+    assert "function formatDuration" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "async function duplicateProject" in app_js
     assert "async function pauseProject" in app_js
@@ -331,6 +334,11 @@ def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
         "failed_key": None,
         "failed_title": None,
     }
+    runtime = response.json()["runtime"]
+    assert runtime["started_at"] is None
+    assert runtime["elapsed_seconds"] is None
+    assert runtime["active_node"] is None
+    assert runtime["last_activity"]["title"] == "Seed"
 
 
 def test_run_project_api_starts_observable_background_run(tmp_path, monkeypatch) -> None:
@@ -371,10 +379,42 @@ def test_run_project_api_starts_observable_background_run(tmp_path, monkeypatch)
     body = response.json()
     assert body["project"]["status"] == "running"
     assert body["activity"][0]["title"] == "Project created"
+    status_event = body["activity"][-1]
+    assert status_event["type"] == "status_change"
+    assert status_event["title"] == "Project run started"
+    assert status_event["details"]["previous_status"] == "draft"
+    assert status_event["details"]["status"] == "running"
     assert body["progress"]["completed"] == 0
     assert body["progress"]["total"] == 5
+    assert body["runtime"]["started_at"] == status_event["occurred_at"]
+    assert body["runtime"]["elapsed_seconds"] >= 0
+    assert body["runtime"]["last_activity"]["title"] == "Project run started"
     assert duplicate_response.status_code == 400
     assert duplicate_response.json()["detail"] == "Project is already running."
+
+
+def test_background_project_job_keeps_persisted_failure_inside_worker(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+    storage = Storage(db_path)
+    storage.migrate()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+
+    def failing_run(storage, project_id, agent) -> None:
+        storage.update_project_status(project_id, "failed", "模型连接失败")
+        raise RuntimeError("模型连接失败")
+
+    monkeypatch.setattr(web_module, "run_canvas_project", failing_run)
+
+    web_module._run_project_job(db_path, project_id, "test-model")
+
+    project = Storage(db_path).get_project(project_id)
+    activity = Storage(db_path).get_project_activity(project_id)
+    assert project["status"] == "failed"
+    assert activity[-1]["title"] == "Project failed"
+    assert activity[-1]["description"] == "模型连接失败"
 
 
 def test_pause_project_api_marks_running_project_and_blocks_early_resume(tmp_path) -> None:
@@ -413,6 +453,12 @@ def test_pause_project_api_marks_running_project_and_blocks_early_resume(tmp_pat
     assert body["project"]["status"] == "paused"
     assert body["progress"]["active_key"] == "premise"
     assert body["progress"]["active_title"] == "Premise Agent"
+    assert body["activity"][-1]["title"] == "Project paused"
+    assert body["activity"][-1]["details"]["previous_status"] == "running"
+    assert body["runtime"]["started_at"] is not None
+    assert body["runtime"]["finished_at"] == body["project"]["updated_at"]
+    assert body["runtime"]["active_node"]["key"] == "premise"
+    assert body["runtime"]["active_node"]["elapsed_seconds"] >= 0
     assert resume_response.status_code == 400
     assert resume_response.json()["detail"] == "Project is still pausing after the active node."
 
@@ -477,6 +523,8 @@ def test_reset_project_api_turns_failed_project_back_into_editable_draft(tmp_pat
         "failed_key": None,
         "failed_title": None,
     }
+    assert response.json()["activity"][-1]["title"] == "Project reset to draft"
+    assert response.json()["activity"][-1]["details"]["previous_status"] == "failed"
     assert second_response.status_code == 400
     assert second_response.json()["detail"] == "Only failed projects can be reset."
 
