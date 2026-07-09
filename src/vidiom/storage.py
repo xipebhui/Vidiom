@@ -124,6 +124,21 @@ class Storage:
                     target_key TEXT NOT NULL,
                     FOREIGN KEY(project_id) REFERENCES projects(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS project_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    details_json TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_project_events_project_id
+                    ON project_events(project_id, id);
                 """
             )
             project_columns = {
@@ -437,6 +452,27 @@ class Storage:
                     "occurred_at": node["updated_at"],
                 }
             )
+        with self.connect() as conn:
+            event_rows = conn.execute(
+                """
+                SELECT event_type, title, status, description, details_json, created_at
+                FROM project_events
+                WHERE project_id = ?
+                ORDER BY id
+                """,
+                (project_id,),
+            ).fetchall()
+        for row in event_rows:
+            activity.append(
+                {
+                    "type": row["event_type"],
+                    "title": row["title"],
+                    "status": row["status"],
+                    "description": row["description"],
+                    "details": _json_from_column(row["details_json"]),
+                    "occurred_at": row["created_at"],
+                }
+            )
         return activity
 
     def export_project_package(self, project_id: int) -> dict[str, Any]:
@@ -471,6 +507,7 @@ class Storage:
                 for key, node in nodes.items()
                 if node["output"] is not None
             },
+            "activity": self.get_project_activity(project_id),
         }
 
     def get_canvas_node(self, project_id: int, node_key: str) -> dict[str, Any]:
@@ -675,6 +712,8 @@ class Storage:
             if node["status"] != "completed" or not node["output_json"]:
                 raise RuntimeError("Project script is not ready to edit.")
 
+            previous_script = json.loads(node["output_json"])
+            edit_summary = _script_edit_summary(previous_script, script)
             script_json = _json_or_none(script)
             conn.execute(
                 """
@@ -699,6 +738,20 @@ class Storage:
                 WHERE inspiration_id = ?
                 """,
                 (title, script_json, project["inspiration_id"]),
+            )
+            conn.execute(
+                """
+                INSERT INTO project_events(
+                    project_id, event_type, title, status, description, details_json, created_at
+                )
+                VALUES (?, 'script_edit', 'Script edits saved', 'completed', ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    edit_summary["description"],
+                    _json_or_none(edit_summary["details"]),
+                    now,
+                ),
             )
 
     def update_canvas_node_status(
@@ -810,3 +863,82 @@ def _output_summary(output: dict[str, Any]) -> str:
     if "visual_style" in output:
         return str(output["visual_style"])
     return "Completed."
+
+
+def _script_edit_summary(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    changed_fields: list[str] = []
+    if previous.get("title") != current.get("title"):
+        changed_fields.append("title")
+    if previous.get("logline") != current.get("logline"):
+        changed_fields.append("logline")
+
+    changed_beats = _changed_index_count(
+        previous.get("episode_outline", []),
+        current.get("episode_outline", []),
+        ("beat", "purpose"),
+    )
+    changed_scenes = _changed_index_count(
+        previous.get("scenes", []),
+        current.get("scenes", []),
+        ("summary",),
+    )
+    changed_dialogue = _changed_dialogue_count(
+        previous.get("scenes", []),
+        current.get("scenes", []),
+    )
+
+    summary_parts = []
+    if changed_fields:
+        summary_parts.append(", ".join(changed_fields))
+    if changed_beats:
+        summary_parts.append(f"{changed_beats} beat{'s' if changed_beats != 1 else ''}")
+    if changed_scenes:
+        summary_parts.append(f"{changed_scenes} scene{'s' if changed_scenes != 1 else ''}")
+    if changed_dialogue:
+        summary_parts.append(
+            f"{changed_dialogue} dialogue line{'s' if changed_dialogue != 1 else ''}"
+        )
+
+    description = "Updated " + "; ".join(summary_parts) if summary_parts else "Saved script."
+    return {
+        "description": description,
+        "details": {
+            "changed_fields": changed_fields,
+            "changed_beats": changed_beats,
+            "changed_scenes": changed_scenes,
+            "changed_dialogue": changed_dialogue,
+            "title": current.get("title"),
+            "logline": current.get("logline"),
+        },
+    }
+
+
+def _changed_index_count(
+    previous_items: list[dict[str, Any]],
+    current_items: list[dict[str, Any]],
+    keys: tuple[str, ...],
+) -> int:
+    changed = 0
+    for index, current_item in enumerate(current_items):
+        previous_item = previous_items[index] if index < len(previous_items) else {}
+        if any(previous_item.get(key) != current_item.get(key) for key in keys):
+            changed += 1
+    return changed
+
+
+def _changed_dialogue_count(
+    previous_scenes: list[dict[str, Any]],
+    current_scenes: list[dict[str, Any]],
+) -> int:
+    changed = 0
+    for scene_index, current_scene in enumerate(current_scenes):
+        previous_scene = previous_scenes[scene_index] if scene_index < len(previous_scenes) else {}
+        previous_lines = previous_scene.get("dialogue", [])
+        for line_index, current_line in enumerate(current_scene.get("dialogue", [])):
+            previous_line = previous_lines[line_index] if line_index < len(previous_lines) else {}
+            if (
+                previous_line.get("line") != current_line.get("line")
+                or previous_line.get("direction") != current_line.get("direction")
+            ):
+                changed += 1
+    return changed

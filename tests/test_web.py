@@ -546,7 +546,19 @@ def test_update_project_script_api_saves_completed_deliverable_edits(tmp_path) -
         nodes["script"]["output"]["scenes"][0]["dialogue"][0]["line"]
         == "这不是素材，是明天的求救。"
     )
+    activity = response.json()["activity"]
+    script_edit = activity[-1]
+    assert script_edit["type"] == "script_edit"
+    assert script_edit["title"] == "Script edits saved"
+    assert script_edit["status"] == "completed"
+    assert script_edit["description"] == (
+        "Updated title, logline; 1 beat; 1 dialogue line"
+    )
+    assert script_edit["details"]["changed_fields"] == ["title", "logline"]
+    assert script_edit["details"]["changed_beats"] == 1
+    assert script_edit["details"]["changed_dialogue"] == 1
     assert export_response.json()["deliverables"]["script"]["title"] == "倒计时素材：直播版"
+    assert export_response.json()["activity"][-1]["type"] == "script_edit"
     productions = override_storage().list_productions(limit=10)
     assert productions[0].title == "倒计时素材：直播版"
     assert productions[0].payload["logline"] == edited_script["logline"]
