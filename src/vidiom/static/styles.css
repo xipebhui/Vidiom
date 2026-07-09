@@ -817,11 +817,13 @@ pre {
 }
 
 .draft-editor label,
-.script-editor label {
+.script-editor label,
+.production-editor label {
   margin-bottom: 0;
 }
 
-.script-editor {
+.script-editor,
+.production-editor {
   display: grid;
   gap: 10px;
 }

@@ -6,6 +6,7 @@ const state = {
   selectedKey: "seed",
   reviewTab: "script",
   scriptEditing: false,
+  productionEditing: false,
   running: false,
   pollingProjectId: null,
   pollTimer: null,
@@ -59,6 +60,11 @@ el.reviewTabs.forEach((tab) => {
 
 loadProjects();
 
+function resetReviewEditors() {
+  state.scriptEditing = false;
+  state.productionEditing = false;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -111,7 +117,7 @@ async function loadProject(projectId) {
     state.selectedKey = state.project.nodes.find((node) => node.key === state.selectedKey)
       ? state.selectedKey
       : "seed";
-    state.scriptEditing = false;
+    resetReviewEditors();
     render();
     syncProjectPolling();
   } catch (error) {
@@ -136,7 +142,7 @@ async function createProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
-    state.scriptEditing = false;
+    resetReviewEditors();
     el.seedText.value = "";
     resetProjectFilters();
     await loadProjects();
@@ -185,7 +191,7 @@ async function runProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = activeNodeKey(state.progress) || "premise";
-    state.scriptEditing = false;
+    resetReviewEditors();
     await loadProjects();
     render();
     syncProjectPolling();
@@ -206,7 +212,7 @@ async function pauseProject() {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
-    state.scriptEditing = false;
+    resetReviewEditors();
     await loadProjects();
     render();
     syncProjectPolling();
@@ -240,7 +246,7 @@ async function saveDraftEdits(event) {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
-    state.scriptEditing = false;
+    resetReviewEditors();
     await loadProjects();
     render();
   } catch (error) {
@@ -273,7 +279,51 @@ async function saveScriptEdits(event) {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
-    state.scriptEditing = false;
+    resetReviewEditors();
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function saveProductionEdits(event) {
+  event.preventDefault();
+  if (!state.project || state.project.status !== "completed") return;
+
+  const production = productionFromEditor(event.currentTarget);
+  if (!production.visual_style) {
+    showError("Visual Style 不能为空。");
+    return;
+  }
+  if (production.shot_plan.some((shot) => !shot.shot || !shot.purpose)) {
+    showError("每个镜头都需要镜头描述和目的。");
+    return;
+  }
+  if (
+    production.shot_plan.some(
+      (shot) =>
+        !Number.isInteger(shot.duration_seconds) ||
+        shot.duration_seconds < 1 ||
+        shot.duration_seconds > 60,
+    )
+  ) {
+    showError("每个镜头时长需要是 1-60 秒。");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}/production`, {
+      method: "PATCH",
+      body: JSON.stringify(production),
+    });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    resetReviewEditors();
     await loadProjects();
     render();
   } catch (error) {
@@ -320,7 +370,7 @@ async function duplicateProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
-    state.scriptEditing = false;
+    resetReviewEditors();
     resetProjectFilters();
     await loadProjects();
     render();
@@ -344,7 +394,7 @@ async function reviseProjectFromNode(startNode) {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = startNode;
-    state.scriptEditing = false;
+    resetReviewEditors();
     resetProjectFilters();
     await loadProjects();
     render();
@@ -365,7 +415,7 @@ async function resetProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = activeNodeKey(state.progress) || "seed";
-    state.scriptEditing = false;
+    resetReviewEditors();
     await loadProjects();
     render();
   } catch (error) {
@@ -759,6 +809,11 @@ function renderCharacterReview(script) {
 }
 
 function renderProductionReview(script, production) {
+  if (state.productionEditing && state.project?.status === "completed") {
+    renderProductionEditor(production);
+    return;
+  }
+
   const notes = script.production_notes;
   const shotPlan = production.shot_plan
     .map(
@@ -772,6 +827,7 @@ function renderProductionReview(script, production) {
     )
     .join("");
   el.scriptPreview.innerHTML = `
+    ${renderProductionEditAction()}
     <div class="review-section">
       <h3>Production Pack</h3>
       <div class="kv">
@@ -797,6 +853,85 @@ function renderProductionReview(script, production) {
       <div class="shot-list">${shotPlan}</div>
     </div>
   `;
+  const editButton = el.scriptPreview.querySelector("[data-edit-production]");
+  if (editButton) {
+    editButton.addEventListener("click", () => {
+      state.productionEditing = true;
+      renderScript();
+    });
+  }
+}
+
+function renderProductionEditAction() {
+  if (state.project?.status !== "completed") return "";
+  return `
+    <div class="review-actions">
+      <button class="secondary-button full-width" type="button" data-edit-production>
+        编辑拍摄包
+      </button>
+    </div>
+  `;
+}
+
+function renderProductionEditor(production) {
+  const shotFields = production.shot_plan
+    .map(
+      (shot, index) => `
+        <fieldset class="edit-group" data-shot-index="${index}">
+          <legend>Shot ${index + 1}</legend>
+          <label for="shotName${index}">Shot</label>
+          <input id="shotName${index}" name="shot" value="${escapeHtml(shot.shot)}" />
+          <label for="shotPurpose${index}">Purpose</label>
+          <textarea id="shotPurpose${index}" name="purpose" rows="2">${escapeHtml(
+            shot.purpose,
+          )}</textarea>
+          <label for="shotDuration${index}">Duration seconds</label>
+          <input
+            id="shotDuration${index}"
+            name="duration_seconds"
+            type="number"
+            min="1"
+            max="60"
+            value="${escapeHtml(shot.duration_seconds)}"
+          />
+        </fieldset>
+      `,
+    )
+    .join("");
+
+  el.scriptPreview.innerHTML = `
+    <form id="productionEditor" class="production-editor">
+      <label for="productionVisualStyle">Visual Style</label>
+      <textarea id="productionVisualStyle" name="visual_style" rows="3">${escapeHtml(
+        production.visual_style,
+      )}</textarea>
+      <label for="productionLocations">Locations</label>
+      <textarea id="productionLocations" name="locations" rows="4">${escapeHtml(
+        production.locations.join("\n"),
+      )}</textarea>
+      <label for="productionProps">Props</label>
+      <textarea id="productionProps" name="props" rows="4">${escapeHtml(
+        production.props.join("\n"),
+      )}</textarea>
+      <label for="productionEditNotes">Edit Notes</label>
+      <textarea id="productionEditNotes" name="edit_notes" rows="4">${escapeHtml(
+        production.edit_notes.join("\n"),
+      )}</textarea>
+      <div class="review-section">
+        <h3>Shot Plan</h3>
+        ${shotFields}
+      </div>
+      <div class="form-actions">
+        <button class="secondary-button" type="button" data-cancel-production-edit>取消</button>
+        <button class="primary-button" type="submit">保存拍摄包</button>
+      </div>
+    </form>
+  `;
+  el.scriptPreview.querySelector("#productionEditor").addEventListener("submit", saveProductionEdits);
+  el.scriptPreview.querySelector("[data-cancel-production-edit]").addEventListener("click", () => {
+    state.productionEditing = false;
+    renderScript();
+  });
 }
 
 function renderDialogueLine(line) {
@@ -920,6 +1055,29 @@ function scriptFromEditor(form) {
   });
 
   return script;
+}
+
+function productionFromEditor(form) {
+  const shotPlan = Array.from(form.querySelectorAll("[data-shot-index]")).map((group) => ({
+    shot: group.querySelector("[name='shot']").value.trim(),
+    purpose: group.querySelector("[name='purpose']").value.trim(),
+    duration_seconds: Number(group.querySelector("[name='duration_seconds']").value),
+  }));
+
+  return {
+    visual_style: form.querySelector("[name='visual_style']").value.trim(),
+    locations: linesFromTextarea(form.querySelector("[name='locations']")),
+    props: linesFromTextarea(form.querySelector("[name='props']")),
+    shot_plan: shotPlan,
+    edit_notes: linesFromTextarea(form.querySelector("[name='edit_notes']")),
+  };
+}
+
+function linesFromTextarea(textarea) {
+  return textarea.value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 function renderActivity() {

@@ -754,6 +754,71 @@ class Storage:
                 ),
             )
 
+    def update_completed_project_production(
+        self, project_id: int, production: dict[str, Any]
+    ) -> None:
+        _validate_production_pack(production)
+        now = utc_now()
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, status
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            if project["status"] != "completed":
+                raise RuntimeError("Only completed projects can have production edits saved.")
+
+            node = conn.execute(
+                """
+                SELECT status, output_json
+                FROM canvas_nodes
+                WHERE project_id = ? AND node_key = 'production'
+                """,
+                (project_id,),
+            ).fetchone()
+            if node is None:
+                raise LookupError(f"Node 'production' was not found in project {project_id}.")
+            if node["status"] != "completed" or not node["output_json"]:
+                raise RuntimeError("Project production pack is not ready to edit.")
+
+            previous_production = json.loads(node["output_json"])
+            edit_summary = _production_edit_summary(previous_production, production)
+            conn.execute(
+                """
+                UPDATE canvas_nodes
+                SET output_json = ?, error = NULL, updated_at = ?
+                WHERE project_id = ? AND node_key = 'production'
+                """,
+                (_json_or_none(production), now, project_id),
+            )
+            conn.execute(
+                """
+                UPDATE projects
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (now, project_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO project_events(
+                    project_id, event_type, title, status, description, details_json, created_at
+                )
+                VALUES (?, 'production_edit', 'Production edits saved', 'completed', ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    edit_summary["description"],
+                    _json_or_none(edit_summary["details"]),
+                    now,
+                ),
+            )
+
     def update_canvas_node_status(
         self, project_id: int, node_key: str, status: str, error: str | None
     ) -> None:
@@ -913,6 +978,67 @@ def _script_edit_summary(previous: dict[str, Any], current: dict[str, Any]) -> d
     }
 
 
+def _production_edit_summary(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    changed_fields: list[str] = []
+    if previous.get("visual_style") != current.get("visual_style"):
+        changed_fields.append("visual_style")
+
+    changed_locations = _changed_sequence_count(
+        previous.get("locations", []),
+        current.get("locations", []),
+    )
+    changed_props = _changed_sequence_count(previous.get("props", []), current.get("props", []))
+    changed_shots = _changed_index_count(
+        previous.get("shot_plan", []),
+        current.get("shot_plan", []),
+        ("shot", "purpose", "duration_seconds"),
+    )
+    changed_edit_notes = _changed_sequence_count(
+        previous.get("edit_notes", []),
+        current.get("edit_notes", []),
+    )
+
+    summary_parts = []
+    if changed_fields:
+        summary_parts.append(", ".join(changed_fields))
+    if changed_locations:
+        summary_parts.append(
+            f"{changed_locations} location{'s' if changed_locations != 1 else ''}"
+        )
+    if changed_props:
+        summary_parts.append(f"{changed_props} prop{'s' if changed_props != 1 else ''}")
+    if changed_shots:
+        summary_parts.append(f"{changed_shots} shot{'s' if changed_shots != 1 else ''}")
+    if changed_edit_notes:
+        summary_parts.append(
+            f"{changed_edit_notes} edit note{'s' if changed_edit_notes != 1 else ''}"
+        )
+
+    description = (
+        "Updated " + "; ".join(summary_parts) if summary_parts else "Saved production pack."
+    )
+    return {
+        "description": description,
+        "details": {
+            "changed_fields": changed_fields,
+            "changed_locations": changed_locations,
+            "changed_props": changed_props,
+            "changed_shots": changed_shots,
+            "changed_edit_notes": changed_edit_notes,
+            "visual_style": current.get("visual_style"),
+        },
+    }
+
+
+def _changed_sequence_count(previous_items: list[Any], current_items: list[Any]) -> int:
+    changed = 0
+    for index, current_item in enumerate(current_items):
+        previous_item = previous_items[index] if index < len(previous_items) else None
+        if previous_item != current_item:
+            changed += 1
+    return changed + max(0, len(previous_items) - len(current_items))
+
+
 def _changed_index_count(
     previous_items: list[dict[str, Any]],
     current_items: list[dict[str, Any]],
@@ -942,3 +1068,35 @@ def _changed_dialogue_count(
             ):
                 changed += 1
     return changed
+
+
+def _validate_production_pack(production: dict[str, Any]) -> None:
+    required = {"visual_style", "locations", "props", "shot_plan", "edit_notes"}
+    missing = sorted(required - set(production))
+    if missing:
+        raise ValueError(f"Production pack is missing required fields: {missing}")
+    if not str(production.get("visual_style", "")).strip():
+        raise ValueError("Production pack must contain a visual style.")
+    _validate_string_list(production.get("locations"), "locations", 2)
+    _validate_string_list(production.get("props"), "props", 3)
+    _validate_string_list(production.get("edit_notes"), "edit notes", 3)
+    shot_plan = production.get("shot_plan")
+    if not isinstance(shot_plan, list) or len(shot_plan) < 5:
+        raise ValueError("Production pack must contain at least 5 shots.")
+    for shot in shot_plan:
+        if not isinstance(shot, dict):
+            raise ValueError("Each production shot must be an object.")
+        if not str(shot.get("shot", "")).strip():
+            raise ValueError("Each production shot must contain a shot description.")
+        if not str(shot.get("purpose", "")).strip():
+            raise ValueError("Each production shot must contain a purpose.")
+        duration = shot.get("duration_seconds")
+        if not isinstance(duration, int) or duration < 1 or duration > 60:
+            raise ValueError("Each production shot duration must be 1-60 seconds.")
+
+
+def _validate_string_list(value: Any, label: str, min_items: int) -> None:
+    if not isinstance(value, list) or len(value) < min_items:
+        raise ValueError(f"Production pack must contain at least {min_items} {label}.")
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise ValueError(f"Production pack {label} cannot contain empty items.")

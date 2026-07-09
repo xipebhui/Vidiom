@@ -43,10 +43,15 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "data-revise-node" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
+    assert "async function saveProductionEdits" in app_js
+    assert "function renderProductionEditor" in app_js
+    assert "function productionFromEditor" in app_js
+    assert "data-edit-production" in app_js
     assert "async function saveScriptEdits" in app_js
     assert "function renderScriptEditor" in app_js
     assert "function scriptFromEditor" in app_js
     assert "/script" in app_js
+    assert "/production" in app_js
 
 
 def test_create_project_api(tmp_path) -> None:
@@ -598,6 +603,111 @@ def test_update_project_script_api_rejects_non_completed_project(tmp_path) -> No
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Only completed projects can have script edits saved."
+
+
+def test_update_project_production_api_saves_completed_deliverable_edits(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(project_id, "script", valid_payload())
+    storage.complete_canvas_node(project_id, "production", production_output())
+    project = storage.get_project(project_id)
+    storage.complete(project["inspiration_id"], valid_payload())
+    storage.update_project_title(project_id, "倒计时素材")
+    storage.update_project_status(project_id, "completed")
+
+    edited_production = production_output()
+    edited_production["visual_style"] = "冷色剪辑室与暖色直播画面交替推进"
+    edited_production["locations"][0] = "剪辑室工位"
+    edited_production["props"][1] = "直播手机"
+    edited_production["shot_plan"][0]["purpose"] = "前三秒直接展示未来事故素材"
+    edited_production["shot_plan"][0]["duration_seconds"] = 10
+    edited_production["edit_notes"][0] = "开场 3 秒叠加素材时间码"
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}/production",
+            json=edited_production,
+        )
+        export_response = client.get(f"/api/projects/{project_id}/export")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    project = response.json()["project"]
+    nodes = {node["key"]: node for node in project["nodes"]}
+    assert nodes["production"]["output"]["visual_style"] == "冷色剪辑室与暖色直播画面交替推进"
+    assert nodes["production"]["output"]["locations"][0] == "剪辑室工位"
+    assert nodes["production"]["output"]["props"][1] == "直播手机"
+    assert nodes["production"]["output"]["shot_plan"][0]["duration_seconds"] == 10
+    activity = response.json()["activity"]
+    production_edit = activity[-1]
+    assert production_edit["type"] == "production_edit"
+    assert production_edit["title"] == "Production edits saved"
+    assert production_edit["status"] == "completed"
+    assert production_edit["description"] == (
+        "Updated visual_style; 1 location; 1 prop; 1 shot; 1 edit note"
+    )
+    assert production_edit["details"]["changed_shots"] == 1
+    export_body = export_response.json()
+    assert export_body["deliverables"]["production_pack"]["shot_plan"][0]["purpose"] == (
+        "前三秒直接展示未来事故素材"
+    )
+    assert export_body["activity"][-1]["type"] == "production_edit"
+
+
+def test_update_project_production_api_rejects_non_completed_project(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(project_id, "production", production_output())
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}/production",
+            json=production_output(),
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only completed projects can have production edits saved."
 
 
 def test_export_project_api_rejects_draft_project(tmp_path) -> None:

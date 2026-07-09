@@ -64,6 +64,20 @@ class UpdateScriptRequest(BaseModel):
     script: dict
 
 
+class ProductionShotRequest(BaseModel):
+    shot: str = Field(min_length=1, max_length=160)
+    purpose: str = Field(min_length=1, max_length=300)
+    duration_seconds: int = Field(ge=1, le=60)
+
+
+class UpdateProductionRequest(BaseModel):
+    visual_style: str = Field(min_length=1, max_length=300)
+    locations: list[str] = Field(min_length=2, max_length=20)
+    props: list[str] = Field(min_length=3, max_length=30)
+    shot_plan: list[ProductionShotRequest] = Field(min_length=5, max_length=40)
+    edit_notes: list[str] = Field(min_length=3, max_length=30)
+
+
 def get_settings() -> Settings:
     return Settings.from_env()
 
@@ -246,6 +260,24 @@ def update_project_script(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.patch("/api/projects/{project_id}/production")
+def update_project_production(
+    project_id: int,
+    request: UpdateProductionRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storage.update_completed_project_production(
+            project_id,
+            _production_payload(request),
+        )
+        return _project_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/projects/{project_id}/run", response_model=RunProjectResponse)
 def run_project(
     project_id: int,
@@ -319,6 +351,25 @@ def _brief_payload(brief: CreativeBriefRequest | None) -> dict | None:
         else:
             payload[key] = value
     return payload or None
+
+
+def _production_payload(request: UpdateProductionRequest) -> dict:
+    payload = request.model_dump()
+    payload["visual_style"] = payload["visual_style"].strip()
+    payload["locations"] = _clean_string_list(payload["locations"])
+    payload["props"] = _clean_string_list(payload["props"])
+    payload["edit_notes"] = _clean_string_list(payload["edit_notes"])
+    for shot in payload["shot_plan"]:
+        shot["shot"] = shot["shot"].strip()
+        shot["purpose"] = shot["purpose"].strip()
+    return payload
+
+
+def _clean_string_list(values: list[str]) -> list[str]:
+    cleaned = [value.strip() for value in values]
+    if any(not value for value in cleaned):
+        raise ValueError("Production pack lists cannot contain empty items.")
+    return cleaned
 
 
 def _export_filename(payload: dict) -> str:
