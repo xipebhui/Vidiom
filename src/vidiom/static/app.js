@@ -595,6 +595,10 @@ function renderScript() {
     renderProductionReview(script, production);
     return;
   }
+  if (state.reviewTab === "quality") {
+    renderQualityReview(script, production);
+    return;
+  }
 
   renderScriptReview(script);
 }
@@ -607,7 +611,8 @@ function renderReviewTabs(hasScript, hasProduction) {
     const isActive = tab.dataset.reviewTab === state.reviewTab;
     tab.classList.toggle("active", isActive);
     tab.setAttribute("aria-selected", String(isActive));
-    tab.disabled = !hasScript || (tab.dataset.reviewTab === "production" && !hasProduction);
+    tab.disabled =
+      !hasScript || (tab.dataset.reviewTab === "production" && !hasProduction);
   });
 }
 
@@ -932,6 +937,162 @@ function renderProductionEditor(production) {
     state.productionEditing = false;
     renderScript();
   });
+}
+
+function renderQualityReview(script, production) {
+  const report = qualityReport(script, production, state.project?.brief || {});
+  const issues = report.issues.length
+    ? report.issues.map(renderQualityIssue).join("")
+    : `<div class="empty">No blocking issues found</div>`;
+
+  el.scriptPreview.innerHTML = `
+    <div class="quality-summary status-${escapeHtml(report.status)}">
+      <strong>${escapeHtml(report.label)}</strong>
+      <span>${escapeHtml(report.summary)}</span>
+    </div>
+    <div class="quality-metrics">
+      ${report.metrics.map(renderQualityMetric).join("")}
+    </div>
+    <div class="review-section">
+      <h3>Release Checks</h3>
+      <div class="quality-issue-list">${issues}</div>
+    </div>
+  `;
+}
+
+function renderQualityMetric(metric) {
+  return `
+    <div class="quality-metric">
+      <span>${escapeHtml(metric.label)}</span>
+      <strong>${escapeHtml(metric.value)}</strong>
+    </div>
+  `;
+}
+
+function renderQualityIssue(issue) {
+  return `
+    <article class="quality-issue ${escapeHtml(issue.severity)}">
+      <strong>${escapeHtml(issue.title)}</strong>
+      <p>${escapeHtml(issue.detail)}</p>
+    </article>
+  `;
+}
+
+function qualityReport(script, production, brief) {
+  const scenes = Array.isArray(script.scenes) ? script.scenes : [];
+  const outline = Array.isArray(script.episode_outline) ? script.episode_outline : [];
+  const dialogueCount = scenes.reduce(
+    (count, scene) => count + (Array.isArray(scene.dialogue) ? scene.dialogue.length : 0),
+    0,
+  );
+  const shotPlan = Array.isArray(production?.shot_plan) ? production.shot_plan : [];
+  const shotSeconds = shotPlan.reduce(
+    (total, shot) => total + Number(shot.duration_seconds || 0),
+    0,
+  );
+  const plannedMinutes = shotSeconds ? `${Math.round((shotSeconds / 60) * 10) / 10} min` : "—";
+  const targetMinutes = Number(brief?.duration_minutes || script.runtime_minutes || 0);
+  const issues = [];
+
+  if (String(script.logline || "").trim().length < 18) {
+    issues.push({
+      severity: "blocker",
+      title: "Logline too thin",
+      detail: "Rewrite the logline so the hook, pressure, and choice are clear.",
+    });
+  }
+  if (outline.length < 5) {
+    issues.push({
+      severity: "warning",
+      title: "Beat count is light",
+      detail: "Add enough episode beats to carry setup, turn, pressure, climax, and ending.",
+    });
+  }
+  if (scenes.length < 3) {
+    issues.push({
+      severity: "blocker",
+      title: "Too few scenes",
+      detail: "Add at least three playable scenes before export review.",
+    });
+  }
+  if (dialogueCount < scenes.length * 2) {
+    issues.push({
+      severity: "warning",
+      title: "Dialogue coverage is low",
+      detail: "Give each scene enough spoken action for actors and edit timing.",
+    });
+  }
+  if (!production) {
+    issues.push({
+      severity: "blocker",
+      title: "Production pack missing",
+      detail: "Run or revise the Production Agent before delivery review.",
+    });
+  } else {
+    const missingLocations = missingItems(
+      script.production_notes?.locations || [],
+      production.locations || [],
+    );
+    const missingProps = missingItems(script.production_notes?.props || [], production.props || []);
+    if (missingLocations.length) {
+      issues.push({
+        severity: "blocker",
+        title: "Location mismatch",
+        detail: `Production pack is missing: ${missingLocations.join(", ")}`,
+      });
+    }
+    if (missingProps.length) {
+      issues.push({
+        severity: "warning",
+        title: "Prop mismatch",
+        detail: `Production pack should include: ${missingProps.join(", ")}`,
+      });
+    }
+    if (shotPlan.length < Math.max(5, scenes.length)) {
+      issues.push({
+        severity: "warning",
+        title: "Shot plan coverage is low",
+        detail: "Add more shots so every scene has a clear capture plan.",
+      });
+    }
+    if (targetMinutes && shotSeconds > targetMinutes * 60 + 30) {
+      issues.push({
+        severity: "blocker",
+        title: "Shot timing exceeds target",
+        detail: `Shot plan totals ${plannedMinutes} against a ${targetMinutes} min target.`,
+      });
+    }
+    (script.production_notes?.risk_flags || []).forEach((risk) => {
+      issues.push({
+        severity: "warning",
+        title: "Script risk flag",
+        detail: risk,
+      });
+    });
+  }
+
+  const blockers = issues.filter((issue) => issue.severity === "blocker").length;
+  const warnings = issues.filter((issue) => issue.severity === "warning").length;
+  return {
+    status: blockers ? "failed" : warnings ? "pending" : "completed",
+    label: blockers ? "Needs edits" : warnings ? "Ready with warnings" : "Ready for export",
+    summary: `${blockers} blockers · ${warnings} warnings`,
+    issues,
+    metrics: [
+      { label: "Runtime", value: `${script.runtime_minutes || "—"} min` },
+      { label: "Scenes", value: String(scenes.length) },
+      { label: "Dialogue", value: String(dialogueCount) },
+      { label: "Shot Coverage", value: plannedMinutes },
+    ],
+  };
+}
+
+function missingItems(requiredItems, availableItems) {
+  const available = availableItems.map((item) => String(item).trim()).filter(Boolean);
+  return requiredItems
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+    .filter((item) => !available.some((availableItem) => availableItem.includes(item)));
 }
 
 function renderDialogueLine(line) {

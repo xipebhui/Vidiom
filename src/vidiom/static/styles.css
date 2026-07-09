@@ -464,7 +464,7 @@ textarea:focus {
 
 .review-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-bottom: 12px;
 }
@@ -716,6 +716,92 @@ pre {
 
 .shot-card p {
   grid-column: 1 / -1;
+}
+
+.quality-summary {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+}
+
+.quality-summary strong {
+  font-size: 14px;
+}
+
+.quality-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.quality-summary.status-completed {
+  border-color: rgba(20, 125, 117, 0.35);
+  background: rgba(20, 125, 117, 0.08);
+}
+
+.quality-summary.status-pending {
+  border-color: rgba(183, 121, 31, 0.35);
+  background: rgba(183, 121, 31, 0.08);
+}
+
+.quality-summary.status-failed {
+  border-color: rgba(189, 79, 69, 0.35);
+  background: rgba(189, 79, 69, 0.08);
+}
+
+.quality-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quality-metric,
+.quality-issue {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 9px;
+  min-width: 0;
+}
+
+.quality-metric span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.quality-metric strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 14px;
+}
+
+.quality-issue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.quality-issue {
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+.quality-issue.blocker {
+  box-shadow: inset 3px 0 0 var(--coral);
+}
+
+.quality-issue strong {
+  font-size: 13px;
+}
+
+.quality-issue p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .checklist {

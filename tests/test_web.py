@@ -27,6 +27,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert 'data-review-tab="script"' in index_html
     assert 'data-review-tab="characters"' in index_html
     assert 'data-review-tab="production"' in index_html
+    assert 'data-review-tab="quality"' in index_html
     assert "function briefFromForm" in app_js
     assert "function renderBriefFields" in app_js
     assert "function projectListQuery" in app_js
@@ -47,6 +48,10 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderProductionEditor" in app_js
     assert "function productionFromEditor" in app_js
     assert "data-edit-production" in app_js
+    assert "function renderQualityReview" in app_js
+    assert "function qualityReport" in app_js
+    assert "function missingItems" in app_js
+    assert "Release Checks" in app_js
     assert "async function saveScriptEdits" in app_js
     assert "function renderScriptEditor" in app_js
     assert "function scriptFromEditor" in app_js
