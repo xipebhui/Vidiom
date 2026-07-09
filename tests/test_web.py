@@ -56,6 +56,10 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function qualityReport" in app_js
     assert "function missingItems" in app_js
     assert "Release Checks" in app_js
+    assert "async function saveReviewNotes" in app_js
+    assert "function renderReviewNotesEditor" in app_js
+    assert "function reviewNotesFromEditor" in app_js
+    assert "/review-notes" in app_js
     assert "async function saveScriptEdits" in app_js
     assert "function renderScriptEditor" in app_js
     assert "function scriptFromEditor" in app_js
@@ -787,6 +791,107 @@ def test_update_project_production_api_rejects_non_completed_project(tmp_path) -
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Only completed projects can have production edits saved."
+
+
+def test_update_project_review_notes_api_saves_completed_release_notes(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(project_id, "script", valid_payload())
+    storage.complete_canvas_node(project_id, "production", production_output())
+    storage.update_project_title(project_id, "倒计时素材")
+    storage.update_project_status(project_id, "completed")
+
+    review_notes = {
+        "release_status": "needs_edits",
+        "summary": "对白节奏可用，但街口镜头需要补拍。",
+        "next_actions": ["补拍街口广角", "确认白车道具"],
+        "approval_notes": ["剧本结构通过"],
+    }
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}/review-notes",
+            json=review_notes,
+        )
+        export_response = client.get(f"/api/projects/{project_id}/export")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    project = response.json()["project"]
+    assert project["review_notes"] == review_notes
+    review_event = response.json()["activity"][-1]
+    assert review_event["type"] == "review_notes"
+    assert review_event["title"] == "Review notes saved"
+    assert review_event["description"] == "Marked needs_edits; 2 next actions; 1 approval note"
+    assert review_event["details"]["changed_fields"] == [
+        "release_status",
+        "summary",
+        "next_actions",
+        "approval_notes",
+    ]
+    export_body = export_response.json()
+    assert export_body["project"]["review_notes"] == review_notes
+    assert export_body["deliverables"]["review_notes"] == review_notes
+    assert export_body["activity"][-1]["type"] == "review_notes"
+
+
+def test_update_project_review_notes_api_rejects_non_completed_project(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}/review-notes",
+            json={
+                "release_status": "ready",
+                "summary": "可发布。",
+                "next_actions": [],
+                "approval_notes": ["人工通过"],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only completed projects can have review notes saved."
 
 
 def test_export_project_api_rejects_draft_project(tmp_path) -> None:

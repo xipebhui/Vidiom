@@ -8,6 +8,7 @@ const state = {
   reviewTab: "script",
   scriptEditing: false,
   productionEditing: false,
+  reviewNotesEditing: false,
   running: false,
   pollingProjectId: null,
   pollTimer: null,
@@ -65,6 +66,7 @@ loadProjects();
 function resetReviewEditors() {
   state.scriptEditing = false;
   state.productionEditing = false;
+  state.reviewNotesEditing = false;
 }
 
 async function api(path, options = {}) {
@@ -328,6 +330,40 @@ async function saveProductionEdits(event) {
     const body = await api(`/api/projects/${state.project.id}/production`, {
       method: "PATCH",
       body: JSON.stringify(production),
+    });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
+    resetReviewEditors();
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function saveReviewNotes(event) {
+  event.preventDefault();
+  if (!state.project || state.project.status !== "completed") return;
+
+  const reviewNotes = reviewNotesFromEditor(event.currentTarget);
+  if (!reviewNotes.release_status) {
+    showError("请选择发布状态。");
+    return;
+  }
+  if (!reviewNotes.summary) {
+    showError("Review Summary 不能为空。");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}/review-notes`, {
+      method: "PATCH",
+      body: JSON.stringify(reviewNotes),
     });
     state.project = body.project;
     state.activity = body.activity || [];
@@ -965,11 +1001,17 @@ function renderProductionEditor(production) {
 
 function renderQualityReview(script, production) {
   const report = qualityReport(script, production, state.project?.brief || {});
+  if (state.reviewNotesEditing && state.project?.status === "completed") {
+    renderReviewNotesEditor(state.project.review_notes, report);
+    return;
+  }
+
   const issues = report.issues.length
     ? report.issues.map(renderQualityIssue).join("")
     : `<div class="empty">No blocking issues found</div>`;
 
   el.scriptPreview.innerHTML = `
+    ${renderReviewNotesAction()}
     <div class="quality-summary status-${escapeHtml(report.status)}">
       <strong>${escapeHtml(report.label)}</strong>
       <span>${escapeHtml(report.summary)}</span>
@@ -977,11 +1019,89 @@ function renderQualityReview(script, production) {
     <div class="quality-metrics">
       ${report.metrics.map(renderQualityMetric).join("")}
     </div>
+    ${renderReviewNotes(state.project?.review_notes)}
     <div class="review-section">
       <h3>Release Checks</h3>
       <div class="quality-issue-list">${issues}</div>
     </div>
   `;
+  const editButton = el.scriptPreview.querySelector("[data-edit-review-notes]");
+  if (editButton) {
+    editButton.addEventListener("click", () => {
+      state.reviewNotesEditing = true;
+      renderScript();
+    });
+  }
+}
+
+function renderReviewNotesAction() {
+  if (state.project?.status !== "completed") return "";
+  const label = state.project.review_notes ? "编辑发布备注" : "添加发布备注";
+  return `
+    <div class="review-actions">
+      <button class="secondary-button full-width" type="button" data-edit-review-notes>
+        ${label}
+      </button>
+    </div>
+  `;
+}
+
+function renderReviewNotes(notes) {
+  if (!notes) return "";
+  return `
+    <div class="review-section">
+      <h3>Human Review</h3>
+      <div class="review-notes-card status-${escapeHtml(notes.release_status)}">
+        <strong>${escapeHtml(releaseStatusLabel(notes.release_status))}</strong>
+        <p>${escapeHtml(notes.summary)}</p>
+      </div>
+      ${renderChecklist("Next Actions", notes.next_actions || [])}
+      ${renderChecklist("Approval Notes", notes.approval_notes || [])}
+    </div>
+  `;
+}
+
+function renderReviewNotesEditor(notes, report) {
+  const values = notes || {
+    release_status: "",
+    summary: "",
+    next_actions: report.issues.map((issue) => `${issue.title}: ${issue.detail}`),
+    approval_notes: [],
+  };
+  el.scriptPreview.innerHTML = `
+    <form id="reviewNotesEditor" class="review-notes-editor">
+      <label for="reviewReleaseStatus">Release Status</label>
+      <select id="reviewReleaseStatus" name="release_status">
+        <option value="">选择发布状态</option>
+        ${renderOption("ready", "Ready", values.release_status)}
+        ${renderOption("needs_edits", "Needs Edits", values.release_status)}
+        ${renderOption("blocked", "Blocked", values.release_status)}
+      </select>
+      <label for="reviewSummary">Review Summary</label>
+      <textarea id="reviewSummary" name="summary" rows="4" maxlength="500">${escapeHtml(
+        values.summary || "",
+      )}</textarea>
+      <label for="reviewNextActions">Next Actions</label>
+      <textarea id="reviewNextActions" name="next_actions" rows="5">${escapeHtml(
+        (values.next_actions || []).join("\n"),
+      )}</textarea>
+      <label for="reviewApprovalNotes">Approval Notes</label>
+      <textarea id="reviewApprovalNotes" name="approval_notes" rows="4">${escapeHtml(
+        (values.approval_notes || []).join("\n"),
+      )}</textarea>
+      <div class="form-actions">
+        <button class="secondary-button" type="button" data-cancel-review-notes>取消</button>
+        <button class="primary-button" type="submit">保存发布备注</button>
+      </div>
+    </form>
+  `;
+  el.scriptPreview
+    .querySelector("#reviewNotesEditor")
+    .addEventListener("submit", saveReviewNotes);
+  el.scriptPreview.querySelector("[data-cancel-review-notes]").addEventListener("click", () => {
+    state.reviewNotesEditing = false;
+    renderScript();
+  });
 }
 
 function renderQualityMetric(metric) {
@@ -1258,11 +1378,29 @@ function productionFromEditor(form) {
   };
 }
 
+function reviewNotesFromEditor(form) {
+  return {
+    release_status: form.querySelector("[name='release_status']").value,
+    summary: form.querySelector("[name='summary']").value.trim(),
+    next_actions: linesFromTextarea(form.querySelector("[name='next_actions']")),
+    approval_notes: linesFromTextarea(form.querySelector("[name='approval_notes']")),
+  };
+}
+
 function linesFromTextarea(textarea) {
   return textarea.value
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function releaseStatusLabel(status) {
+  const labels = {
+    ready: "Ready",
+    needs_edits: "Needs Edits",
+    blocked: "Blocked",
+  };
+  return labels[status];
 }
 
 function renderActivity() {

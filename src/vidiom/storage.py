@@ -91,6 +91,7 @@ class Storage:
                     inspiration_id INTEGER NOT NULL,
                     seed_text TEXT NOT NULL,
                     brief_json TEXT,
+                    review_notes_json TEXT,
                     title TEXT,
                     status TEXT NOT NULL DEFAULT 'draft',
                     last_error TEXT,
@@ -146,6 +147,8 @@ class Storage:
             }
             if "brief_json" not in project_columns:
                 conn.execute("ALTER TABLE projects ADD COLUMN brief_json TEXT")
+            if "review_notes_json" not in project_columns:
+                conn.execute("ALTER TABLE projects ADD COLUMN review_notes_json TEXT")
 
     def add_inspiration(
         self, text: str, source_type: str = "manual", source_ref: str | None = None
@@ -378,7 +381,7 @@ class Storage:
                 f"""
                 SELECT
                     p.id, p.inspiration_id, p.seed_text, p.brief_json, p.title,
-                    p.status, p.last_error, p.created_at, p.updated_at,
+                    p.review_notes_json, p.status, p.last_error, p.created_at, p.updated_at,
                     COALESCE(SUM(CASE WHEN n.kind = 'agent' THEN 1 ELSE 0 END), 0)
                         AS progress_total,
                     COALESCE(SUM(
@@ -409,7 +412,7 @@ class Storage:
                 """
                 SELECT
                     id, inspiration_id, seed_text, brief_json, title,
-                    status, last_error, created_at, updated_at
+                    review_notes_json, status, last_error, created_at, updated_at
                 FROM projects
                 WHERE id = ?
                 """,
@@ -510,12 +513,14 @@ class Storage:
                 "status": project["status"],
                 "seed_text": project["seed_text"],
                 "brief": project["brief"],
+                "review_notes": project["review_notes"],
                 "created_at": project["created_at"],
                 "updated_at": project["updated_at"],
             },
             "deliverables": {
                 "script": script,
                 "production_pack": production,
+                "review_notes": project["review_notes"],
             },
             "agent_outputs": {
                 key: node["output"]
@@ -881,6 +886,45 @@ class Storage:
                 ),
             )
 
+    def update_completed_project_review_notes(
+        self, project_id: int, review_notes: dict[str, Any]
+    ) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, status, review_notes_json
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            if project["status"] != "completed":
+                raise RuntimeError("Only completed projects can have review notes saved.")
+
+            previous_notes = _json_from_column(project["review_notes_json"]) or {}
+            summary = _review_notes_summary(previous_notes, review_notes)
+            conn.execute(
+                """
+                UPDATE projects
+                SET review_notes_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (_json_or_none(review_notes), now, project_id),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="review_notes",
+                title="Review notes saved",
+                status="completed",
+                description=summary["description"],
+                details=summary["details"],
+                created_at=now,
+            )
+
     def update_canvas_node_status(
         self, project_id: int, node_key: str, status: str, error: str | None
     ) -> None:
@@ -940,6 +984,7 @@ def _project_row(row: sqlite3.Row, include_progress: bool = False) -> dict[str, 
         "inspiration_id": row["inspiration_id"],
         "seed_text": row["seed_text"],
         "brief": _json_from_column(row["brief_json"]),
+        "review_notes": _json_from_column(row["review_notes_json"]),
         "title": row["title"],
         "status": row["status"],
         "last_error": row["last_error"],
@@ -1148,6 +1193,30 @@ def _production_edit_summary(previous: dict[str, Any], current: dict[str, Any]) 
             "changed_shots": changed_shots,
             "changed_edit_notes": changed_edit_notes,
             "visual_style": current.get("visual_style"),
+        },
+    }
+
+
+def _review_notes_summary(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    changed_fields = [
+        field
+        for field in ("release_status", "summary", "next_actions", "approval_notes")
+        if previous.get(field) != current.get(field)
+    ]
+    action_count = len(current.get("next_actions", []))
+    approval_count = len(current.get("approval_notes", []))
+    description = (
+        f"Marked {current.get('release_status')}; "
+        f"{action_count} next action{'s' if action_count != 1 else ''}; "
+        f"{approval_count} approval note{'s' if approval_count != 1 else ''}"
+    )
+    return {
+        "description": description,
+        "details": {
+            "changed_fields": changed_fields,
+            "release_status": current.get("release_status"),
+            "next_actions": current.get("next_actions", []),
+            "approval_notes": current.get("approval_notes", []),
         },
     }
 

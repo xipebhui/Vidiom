@@ -58,6 +58,7 @@ class RunProjectResponse(BaseModel):
 
 ProjectStatusFilter = Literal["draft", "running", "paused", "completed", "failed"]
 RevisionStartNode = Literal["premise", "characters", "beats", "script", "production"]
+ReleaseStatus = Literal["ready", "needs_edits", "blocked"]
 
 
 class ReviseProjectRequest(BaseModel):
@@ -80,6 +81,13 @@ class UpdateProductionRequest(BaseModel):
     props: list[str] = Field(min_length=3, max_length=30)
     shot_plan: list[ProductionShotRequest] = Field(min_length=5, max_length=40)
     edit_notes: list[str] = Field(min_length=3, max_length=30)
+
+
+class UpdateReviewNotesRequest(BaseModel):
+    release_status: ReleaseStatus
+    summary: str = Field(min_length=1, max_length=500)
+    next_actions: list[str] = Field(default_factory=list, max_length=10)
+    approval_notes: list[str] = Field(default_factory=list, max_length=10)
 
 
 def get_settings() -> Settings:
@@ -282,6 +290,24 @@ def update_project_production(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.patch("/api/projects/{project_id}/review-notes")
+def update_project_review_notes(
+    project_id: int,
+    request: UpdateReviewNotesRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storage.update_completed_project_review_notes(
+            project_id,
+            _review_notes_payload(request),
+        )
+        return _project_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/projects/{project_id}/run", response_model=RunProjectResponse)
 def run_project(
     project_id: int,
@@ -456,11 +482,25 @@ def _production_payload(request: UpdateProductionRequest) -> dict:
     return payload
 
 
+def _review_notes_payload(request: UpdateReviewNotesRequest) -> dict:
+    payload = request.model_dump()
+    payload["summary"] = payload["summary"].strip()
+    payload["next_actions"] = _clean_optional_string_list(payload["next_actions"])
+    payload["approval_notes"] = _clean_optional_string_list(payload["approval_notes"])
+    if not payload["summary"]:
+        raise ValueError("Review summary cannot be empty.")
+    return payload
+
+
 def _clean_string_list(values: list[str]) -> list[str]:
     cleaned = [value.strip() for value in values]
     if any(not value for value in cleaned):
         raise ValueError("Production pack lists cannot contain empty items.")
     return cleaned
+
+
+def _clean_optional_string_list(values: list[str]) -> list[str]:
+    return [value.strip() for value in values if value.strip()]
 
 
 def _export_filename(payload: dict) -> str:

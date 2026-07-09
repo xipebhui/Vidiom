@@ -799,7 +799,8 @@ pre {
 }
 
 .quality-metric,
-.quality-issue {
+.quality-issue,
+.review-notes-card {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
@@ -839,6 +840,35 @@ pre {
 
 .quality-issue p {
   margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.review-notes-card {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.review-notes-card.status-ready {
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+
+.review-notes-card.status-needs_edits {
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+.review-notes-card.status-blocked {
+  box-shadow: inset 3px 0 0 var(--coral);
+}
+
+.review-notes-card strong {
+  font-size: 13px;
+}
+
+.review-notes-card p {
+  margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
@@ -976,12 +1006,14 @@ pre {
 
 .draft-editor label,
 .script-editor label,
-.production-editor label {
+.production-editor label,
+.review-notes-editor label {
   margin-bottom: 0;
 }
 
 .script-editor,
-.production-editor {
+.production-editor,
+.review-notes-editor {
   display: grid;
   gap: 10px;
 }
