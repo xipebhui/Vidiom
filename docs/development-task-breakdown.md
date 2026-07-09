@@ -1,225 +1,90 @@
-# Development Task Breakdown: Complete Real Model End-to-End Acceptance
+# Development Task Breakdown: Storyboard Editing and Asset Review Workspace
 
 更新时间：2026-07-10 CST
 
-产品需求来源：`docs/next-product-requirement.md`，Complete Real Model End-to-End Acceptance，更新时间 2026-07-10 CST。
+产品需求来源：`docs/next-product-requirement.md`，Storyboard Editing and Asset Review Workspace，更新时间 2026-07-10 CST。
 
-首要执行项：围绕最新真实 smoke 的 `storyboard_generation=interrupted` 阻塞，收口 Storyboard 真实生成生命周期、用户可读状态、同轮图像/导出复验和 README/验收文档一致性。上一轮 `vidiom smoke-real-model-storyboard` 发布门禁已完成，本轮不重复做门禁，不切换到自由无限画布、批量分镜图、视频、音频或导演台。
+首要执行项：先改造 Storyboard 编辑域模型、Storage 事务和 API 边界，再实现前端 Storyboard 可编辑生产台。现有真实模型主链路已 completed，本轮不得继续围绕 smoke 门禁重复开发，也不得跳到批量分镜图、批量视频、音频、导演台或自由无限画布。
 
-## Task 1: 收口 Storyboard 真实生成生命周期与中断状态
+## Task 1: 建立 Storyboard 编辑域模型、事务存储和 API 边界
 
-目标：让真实 `gpt-5.5` Storyboard 生成在开始、生成中、完成、失败、中断和未完成时都有一致、可交接、可测试的状态；最新中断不得被 UI、smoke、README 或导出包误写成 completed。
+目标：把生成后的 Storyboard 从只读/轻审阅数据改造成可局部编辑、可增删排序、可维护关系、可导出的项目内生产数据。此任务是本轮要求的架构改造首要任务。
 
 产品需求来源：
 
-- 最新真实 smoke：`agent_project` completed，`storyboard_generation` interrupted，`project_image_generation` 和 `export_package` incomplete。
-- Storyboard 长时间运行后被中断时，验收结果显示 interrupted 或等价中断状态，不显示 completed。
-- Provider 错误、非结构化结果或任务中断时，用户和验收文档能看到失败、中断或未完成状态。
-- 已有成功 Storyboard 后再次生成失败或中断，不得让用户误以为旧结果是本次成功结果。
+- Shot 编辑验收：用户可以编辑现有 shot 核心生产字段，编辑后保存、刷新仍可见，并进入导出包。
+- Shot 新增、删除和排序验收：新增、删除、调整顺序后 Storyboard 顺序保持可读，并反映在展示和导出包中。
+- 资产审阅验收：资产或关系变化后，相关 shot 的准备状态可被用户重新判断。
+- 准备度验收：缺少关键字段或关键资产关系的 shots 会被标为需要处理。
 
 影响文件/模块：
 
-- `src/vidiom/storyboard.py`
-- `src/vidiom/smoke.py`
+- `src/vidiom/storyboard_schema.py`
 - `src/vidiom/storage.py`
 - `src/vidiom/web.py`
-- `src/vidiom/static/app.js`
-- `tests/test_storyboard.py`
-- `tests/test_smoke.py`
-- `tests/test_web.py`
-
-实现步骤：
-
-1. 审查 `run_real_model_storyboard_smoke()` 的 Storyboard 阶段，确认 KeyboardInterrupt 或外部中断只会写 `storyboard_generation=interrupted`，并把后续图像与导出标为 `incomplete`。
-2. 审查 `generate_project_storyboard()` 与 `_generate_storyboard_job()`，确认 provider 异常、schema 异常和后台任务异常都会落库为 `generation_status=failed` 和脱敏错误；不要只写 server log。
-3. 明确 Studio API 对运行中 Storyboard 的响应：`generation_status=generating` 时展示生成中；若后台任务失败则展示 failed；若仍有旧 completed 结果，必须说明展示的是上次成功结果。
-4. 若发现当前 Storage/API 无法表达“本次中断但保留旧成功结果”，做小范围状态字段或响应字段补齐；不要重写 Storyboard 表为通用任务表。
-5. 增加或调整测试，覆盖 Storyboard 阶段中断、失败保留旧结果、无旧结果失败不产生 shots、UI/API 可读状态。
-6. 不要引入调用超时调整、自动重试、排队等待、验收窗口延长或人工复跑作为既定实现；如认为需要，写入 README 待处理事项并标注“需用户确认”。
-
-验收标准：
-
-- Storyboard 中断不会写成 completed。
-- 中断后 `project_image_generation` 和 `export_package` 保持 incomplete。
-- Studio 可区分未开始、生成中、成功、失败、失败但有旧成功结果；如实现了中断语义，也必须可见。
-- 失败或中断不会创建假 shots、假 assets、假 image links 或假导出包。
-- 旧 completed Storyboard 可继续展示，但不得被描述为本次真实 smoke 成功。
-- 错误信息不包含 `HM_BASE_URL`、`HM_LLM_APIKEY`、`HM_IMG_APIKEY` 的实际值。
-
-测试要求：
-
-- `.venv/bin/python -m pytest tests/test_storyboard.py tests/test_smoke.py tests/test_web.py`
-- 如修改前端：`node --check src/vidiom/static/app.js`
-- `git diff --check`
-
-是否允许/要求重构：要求小范围重构。允许提取 Storyboard 状态判断 helper、API 响应 helper 或 smoke 阶段断言 helper；不允许前端大重构，不允许新增通用工作流引擎，不允许改用其他模型或 provider。
-
-风险和注意事项：
-
-- 不要把最新中断弱化为普通提示。
-- 不要清空旧 completed Storyboard，除非新的 completed Storyboard 正常替换。
-- 不要把旧成功结果作为本轮 smoke completed 证据。
-- 不要暴露任何 secret value。
-
-## Task 2: 强化真实 smoke 的 Storyboard 阶段可观测性
-
-目标：让 `docs/real-model-smoke-result.md` 在 Storyboard 长耗时、中断、失败或非结构化输出时提供足够信息，供产品、架构和开发下一轮直接判断。
-
-产品需求来源：
-
-- 验收记录明确写入总状态、阶段状态、模型名、耗时、关键计数和错误摘要。
-- 如果真实 smoke 仍失败或中断，写清失败/中断阶段和错误摘要。
-- 不得用历史通过记录覆盖最新中断记录。
-
-影响文件/模块：
-
-- `src/vidiom/smoke.py`
-- `docs/real-model-smoke-result.md`
-- `README.md`
-- `tests/test_smoke.py`
-
-实现步骤：
-
-1. 审查 `write_smoke_result_markdown()`，确认 `storyboard_generation` interrupted/failed 时会保留模型名、开始/结束时间、耗时、摘要和错误。
-2. 若 Storyboard 阶段已有部分可安全记录的上下文，例如 project id、agent node count、source script/production 可用状态、已有旧 completed result 状态，可加入 `details`；不得写入 provider 原始敏感 payload。
-3. 确认 `smoke_gate_completed()` 继续要求 `overall_status=completed` 且四段均 completed。
-4. 增加测试断言：中断结果文件包含 interrupted、模型名、阶段名、后续 incomplete；不包含密钥值。
-5. 开发完成后重新执行真实 `.env` smoke，并让 `docs/real-model-smoke-result.md` 保留最新状态。
-
-验收标准：
-
-- 最新 smoke 文件能直接看出 agent completed、Storyboard interrupted/failed/completed、图像与导出是否 completed。
-- interrupted 和 failed 均不会让 CLI 返回通过。
-- 历史 completed 记录不会覆盖最新 smoke 文件。
-- 结果文件不包含 `.env` secret values。
-
-测试要求：
-
-- `.venv/bin/python -m pytest tests/test_smoke.py`
-- `git diff --check`
-- 显式真实验收：`.venv/bin/vidiom smoke-real-model-storyboard --result-path docs/real-model-smoke-result.md`
-
-是否允许/要求重构：允许小范围重构。可以整理 smoke markdown 生成和阶段 details 组装；不得引入多轮 smoke 数据库表，除非本轮发现文件记录无法满足验收且先在 README 标为需要后续设计。
-
-风险和注意事项：
-
-- 真实 smoke 可能仍 interrupted；这不是通过结果，必须原样记录。
-- 不要为了让文档好看而删除失败/中断摘要。
-- 不要把调用窗口或人工复跑策略写成既定实现。
-
-## Task 3: 同轮复验项目图像与导出包
-
-目标：当 Storyboard 真实 completed 后，继续在同一轮 smoke 中完成 `gpt-image-2` 项目图像和导出包校验；如果 Storyboard 未 completed，下游必须保持 incomplete。
-
-产品需求来源：
-
-- 项目图像生成或复验 completed，并使用 `HM_BASE_URL`、`HM_IMG_APIKEY` 和 `gpt-image-2`。
-- 导出包 completed，并包含 Storyboard metadata、shots、资产摘要和图像关联摘要。
-- 后续未运行阶段显示 incomplete，不被伪造成成功。
-- 常规测试不得自动消耗真实模型额度。
-
-影响文件/模块：
-
-- `src/vidiom/smoke.py`
-- `src/vidiom/storage.py`
-- `src/vidiom/web.py`
-- `tests/test_smoke.py`
 - `tests/test_storyboard.py`
 - `tests/test_web.py`
 
 实现步骤：
 
-1. 复查 smoke 顺序：只有 Storyboard completed 且 `_ensure_storyboard_completed()` 通过后，才进入 `project_image_generation`。
-2. 复查项目图像阶段，确认使用 `OpenAICompatibleImageClient.from_env()`、`HM_IMG_APIKEY` 和 `gpt-image-2`；失败时持久化 failed image asset 记录并让 smoke 阶段 failed。
-3. 复查 `_validate_export_package()`，确保导出包必须包含 completed Storyboard、shots、assets、relationships、image links 摘要和至少一个项目图像资产。
-4. 如果 Storyboard interrupted/failed，确认图像和导出不运行，阶段为 incomplete。
-5. 增加或保留 fake provider 测试，证明成功路径四段 completed，失败路径下游 incomplete。
+1. 在 Storyboard schema 或新的局部编辑 request 校验中定义 shot 可编辑字段：`beat_ref`、`scene_ref`、`characters`、`scene`、`props`、`visual_description`、`action_focus`、`dialogue_or_sound`、`duration_seconds`、`aspect_ratio`、`visual_style`、`image_prompt`、`review_status`、`prompt_ready`。
+2. 在 Storage 中新增事务型方法：
+   - 更新单个 shot 生产字段。
+   - 新增 shot，可指定插入位置；未指定时追加到末尾。
+   - 删除 shot，并清理该 shot 的 `storyboard_shot_assets` 和 `storyboard_shot_image_assets`。
+   - 重排 shots，保证 `sequence_index` 连续且从 1 开始。
+3. 排序实现必须规避 `UNIQUE(storyboard_id, sequence_index)` 的中间态冲突；使用单事务内的安全重编号策略，并在失败时回滚。
+4. 每次 shot 内容、新增、删除或排序成功后，更新项目 `updated_at`，写入 `project_events`，并返回完整 `_storyboard_response()`。
+5. 影响 prompt 或资产语境的 shot 编辑、新增、删除和排序必须让相关 shots 的 `prompt_ready=false`，由用户重新确认；不要静默保留旧 prompt ready。
+6. 在 Web 层新增清晰 API，建议形态：
+   - `PATCH /api/projects/{project_id}/storyboard/shots/{shot_id}`
+   - `POST /api/projects/{project_id}/storyboard/shots`
+   - `DELETE /api/projects/{project_id}/storyboard/shots/{shot_id}`
+   - `POST /api/projects/{project_id}/storyboard/shots/reorder`
+7. API 必须校验 project、storyboard 和 shot 归属；draft 或无 completed Storyboard 的项目不能编辑 shots。
+8. 不要用整包 `replace_project_storyboard()` 作为人工编辑保存方式；该方法继续只服务于模型生成结果替换。
 
 验收标准：
 
-- Storyboard 未 completed 时，不生成本轮图像、不生成本轮导出 completed。
-- Storyboard completed 后，项目图像阶段使用 `gpt-image-2`，并记录 image asset 状态。
-- 导出包只在 completed Storyboard 存在时包含 Storyboard deliverable。
-- 导出包包含 metadata、shots、assets、relations、image links 和 image asset 摘要。
+- 用户通过 API 可以编辑现有 shot 的全部核心生产字段。
+- 新增 shot 后刷新仍存在，且 sequence 可读。
+- 删除 shot 后剩余 sequence 连续，相关 asset/image link 关系被清理。
+- 调整排序后展示和导出包顺序一致。
+- 编辑、新增、删除和排序均写入 activity。
+- 编辑后的 Storyboard 进入 `storage.export_project_package()`。
+- API 不创建假 shots、假 assets、假 image links 或占位成功结果。
 
 测试要求：
 
-- `.venv/bin/python -m pytest tests/test_smoke.py tests/test_storyboard.py tests/test_web.py`
-- `git diff --check`
+- 新增 Storage 测试：shot update/create/delete/reorder、prompt ready invalidation、activity、导出一致性。
+- 新增 Web 测试：新增 API 的 200、404、400 路径和刷新后持久化。
+- 运行：`.venv/bin/python -m pytest tests/test_storyboard.py tests/test_web.py`
+- 运行：`git diff --check`
 
-是否允许/要求重构：允许小范围重构。可以整理导出校验 helper；不得把项目图像复制成 shot 私有资产，不得新增批量分镜图。
-
-风险和注意事项：
-
-- 不要在 Storyboard interrupted 后继续运行图像或导出。
-- 不要把历史 image asset 当作本轮 project_image_generation completed，除非 smoke 明确执行了生成或复验并记录 completed。
-- 不要提交 provider 大型敏感原始 payload。
-
-## Task 4: README 与验收文档同步
-
-目标：让 README、`docs/real-model-smoke-result.md`、产品文档、架构文档和开发拆解对真实模型接入状态保持一致。
-
-产品需求来源：
-
-- README 明确区分历史真实 smoke 通过记录、上一轮 provider 503 失败和最新 Storyboard 中断记录。
-- `docs/real-model-smoke-result.md` 保留最新真实验收结果。
-- 产品、架构和开发文档对“真实模型接入是否完成”的判断一致。
-
-影响文件/模块：
-
-- `README.md`
-- `docs/real-model-smoke-result.md`
-- `docs/architecture-control-plan.md`
-- `docs/development-task-breakdown.md`
-
-实现步骤：
-
-1. 开发完成后更新 README 迭代记录，写明本轮修改、自动化测试结果和最新真实 smoke 状态。
-2. README 必须同时保留并区分：
-   - 历史真实 smoke completed 记录。
-   - 上一轮 provider 503 failed 记录。
-   - 最新 Storyboard interrupted 或本轮重新验收后的最新状态。
-3. 如果本轮真实 smoke completed，写明 agent、Storyboard、项目图像、导出四段均 completed 和关键计数。
-4. 如果本轮真实 smoke 仍 failed/interrupted/incomplete，写清阶段、模型、耗时和错误摘要，不写真实模型接入完成。
-5. 确认文档不包含 secret values。
-
-验收标准：
-
-- README 与 `docs/real-model-smoke-result.md` 的最新状态一致。
-- README 不把历史通过记录写成当前发布通过。
-- 文档能让下一轮产品任务直接判断是否继续围绕真实模型验收。
-- 文档不包含 `HM_LLM_APIKEY`、`HM_IMG_APIKEY` 或实际密钥值。
-
-测试要求：
-
-- `git diff --check`
-- 如修改代码同时运行对应单元测试；仅改文档时至少执行 diff whitespace 检查。
-
-是否允许/要求重构：不要求。只做文档同步。
+是否允许/要求重构：要求重构。允许新增 Storyboard editing helper、request model 和 readiness helper；不允许引入通用工作流引擎，不允许重写为跨项目资产库，不允许改动备用 provider 策略或模型选择。
 
 风险和注意事项：
 
-- 不要删除历史记录；要明确历史记录不是最新验收。
-- 不要把“门禁正确阻塞”写成“真实模型链路已完成”。
-- 不要写入 `.env` 值。
+- 不要把人工编辑实现成只改前端内存。
+- 不要在排序中留下重复或跳号 sequence。
+- 不要把旧 completed Storyboard 覆盖为空结果。
+- 不要暴露 `HM_LLM_APIKEY`、`HM_IMG_APIKEY` 或实际密钥值。
 
-## Task 5: 保持 Storyboard、项目图像和导出回归
+## Task 2: 实现 Storyboard 准备度摘要与阻塞项派生
 
-目标：本轮聚焦真实验收阻塞，但不得让已完成的 Studio Storyboard 审阅、项目图像和导出闭环退化。
+目标：让 Storyboard 工作区和导出包能明确告诉用户当前是否可以进入下一阶段媒体生成准备，而不是只展示 shots 列表。
 
 产品需求来源：
 
-- Studio 仍可触发 Storyboard 生成并查看状态。
-- 成功 Storyboard 仍能展示 shot 列表、角色/场景/道具资产摘要、prompt 准备度和审阅状态。
-- 项目图像能力仍使用 `gpt-image-2`。
-- 已有项目图像仍可与 Storyboard shot 建立关联。
-- 成功 Storyboard 仍能进入导出包；未生成、失败或未完成的 Storyboard 不得作为成功产物导出。
+- Storyboard 工作区显示 shot 总数、已确认数量、需修改数量和 prompt 未准备数量。
+- 用户可以定位未确认、需修改或 prompt 未准备的 shots。
+- 缺少画面描述、缺少提示词、缺少关键资产、时长异常或未确认 shot 的阻塞提示。
+- 导出前能看出 Storyboard 是否还有未处理项。
 
 影响文件/模块：
 
-- `src/vidiom/web.py`
 - `src/vidiom/storage.py`
-- `src/vidiom/static/index.html`
+- `src/vidiom/web.py`
 - `src/vidiom/static/app.js`
 - `src/vidiom/static/styles.css`
 - `tests/test_storyboard.py`
@@ -227,31 +92,283 @@
 
 实现步骤：
 
-1. 复查 `GET /api/projects/{project_id}/storyboard` 返回 shots、assets、relationships、image_links 和 project image_assets 摘要。
-2. 复查 `PATCH /api/projects/{project_id}/storyboard/shots/review` 能保存 `review_status` 和 `prompt_ready`。
-3. 复查 image link/unlink API 只建立或删除关联，不删除项目级 image asset。
-4. 复查项目图像生成 API 和 UI 仍使用 `gpt-image-2`。
-5. 复查导出包在 completed Storyboard 存在时包含完整 Storyboard deliverable；无 completed Storyboard 时不得伪造。
-6. 如 Task 1-4 修改影响 UI 或导出，补充回归测试。
+1. 新增 readiness 派生 helper，基于当前 shots、assets、relationships 和 image links 计算：
+   - `shot_count`
+   - `approved_count`
+   - `needs_changes_count`
+   - `pending_count`
+   - `prompt_not_ready_count`
+   - `shots_with_blockers_count`
+   - `ready_for_media_generation`
+2. 为每个 shot 返回 blockers，至少覆盖：
+   - `review_status` 不是 `approved`
+   - `prompt_ready=false`
+   - `visual_description` 为空
+   - `image_prompt` 为空
+   - `duration_seconds` 不在 schema 允许范围
+   - 缺少 scene 关系或 scene 字段
+   - characters/props 字段与关系明显不一致时提示需要检查
+3. 将 readiness summary 和 blockers 加入 `GET /api/projects/{project_id}/storyboard` 响应。
+4. 将 readiness summary 和 blockers 加入导出包中的 Storyboard deliverable。
+5. 前端 Storyboard 页展示完成度摘要，并提供按 `pending`、`needs_changes`、`approved`、`prompt_not_ready`、`has_blockers` 过滤 shots 的能力。
+6. 不要把 `ready_for_media_generation=true` 当作触发下游生成；本轮只做判断与提示。
 
 验收标准：
 
-- Studio 可查看 Storyboard 状态、shot 列表、资产摘要和图像关联位置。
-- 每个 shot 能展示 prompt ready 和 review status。
-- 已有项目图像可关联到 shot，解绑后项目图像资产仍存在。
-- 成功 Storyboard 导出包包含 metadata、shots、assets、relations、image links 和 image asset 摘要。
-- 未生成或只有失败/中断尝试且无旧成功结果的 Storyboard 不被导出为成功产物。
+- Storyboard 页面显示总 shot 数、已确认数量、需修改数量和 prompt 未准备数量。
+- 用户能定位未确认、需修改、prompt 未准备或有 blockers 的 shots。
+- 导出包包含 readiness summary 和每个 shot blockers。
+- readiness 只基于现有数据派生，不调用真实模型，不生成媒体资产。
 
 测试要求：
 
-- `.venv/bin/python -m pytest tests/test_storyboard.py tests/test_web.py`
-- `node --check src/vidiom/static/app.js`
-- `git diff --check`
+- 新增 readiness helper 单元测试。
+- 新增 API/导出测试，断言 summary 和 blockers。
+- 如修改前端：`node --check src/vidiom/static/app.js`
+- 运行：`.venv/bin/python -m pytest tests/test_storyboard.py tests/test_web.py`
+- 运行：`git diff --check`
 
-是否允许/要求重构：不要求大重构。只允许为修复回归或整理 Storyboard 函数边界做小范围调整。
+是否允许/要求重构：允许小范围重构。可以把 readiness 计算抽到独立 helper；不得新增异步任务或真实模型调用。
 
 风险和注意事项：
 
-- 本轮不做完整 shot 深度编辑、新增/删除/排序。
-- 本轮不做批量分镜图、视频、音频或导演台。
-- 本轮不做跨项目资产库。
+- 不要把 blockers 做成不可解释的布尔值；必须能让用户知道要处理什么。
+- 不要自动把所有 blockers 清空为 ready。
+- 不要引入批量分镜图生成入口。
+
+## Task 3: 实现角色、场景、道具资产 CRUD 与 shot-asset 关系编辑
+
+目标：让项目内角色、场景、道具资产从生成摘要变成可审阅、可编辑、可关联的生产对象。
+
+产品需求来源：
+
+- 用户可以查看角色、场景、道具资产列表。
+- 用户可以编辑资产名称、描述、参考提示词和一致性说明。
+- 用户可以新增资产。
+- 用户可以删除未使用或错误资产。
+- 用户可以查看资产关联的 shots。
+- 用户可以调整 shot 与资产关系。
+- 资产或关系变化后，相关 shot 的准备状态可被用户重新判断。
+
+影响文件/模块：
+
+- `src/vidiom/storyboard_schema.py`
+- `src/vidiom/storage.py`
+- `src/vidiom/web.py`
+- `src/vidiom/static/app.js`
+- `src/vidiom/static/styles.css`
+- `tests/test_storyboard.py`
+- `tests/test_web.py`
+
+实现步骤：
+
+1. 在 Storage 中新增资产事务方法：
+   - 新增 asset，字段为 `asset_type`、`name`、`description`、`reference_prompt`、`consistency_notes`。
+   - 更新 asset 字段。
+   - 删除 asset，并在同一事务中删除相关 `storyboard_shot_assets`。
+2. 资产 `asset_type` 只能是 `character`、`scene`、`prop`；同一 project 下 `asset_type + name` 仍保持唯一。
+3. 新增 shot-asset relation 编辑方法，允许为某个 shot 设置角色、场景、道具关系及 role；每次更新必须校验 asset 与 shot 属于同一 project。
+4. asset 名称变化后，关系应继续通过 `asset_id` 保持稳定；不要依赖旧名称更新关系。
+5. asset 内容或关系变化后，受影响 shots 的 `prompt_ready=false`，并写入 activity。
+6. Web 层新增 API，建议形态：
+   - `POST /api/projects/{project_id}/storyboard/assets`
+   - `PATCH /api/projects/{project_id}/storyboard/assets/{asset_id}`
+   - `DELETE /api/projects/{project_id}/storyboard/assets/{asset_id}`
+   - `PUT /api/projects/{project_id}/storyboard/shots/{shot_id}/assets`
+7. API 响应返回完整 Storyboard 状态，包含 assets、relationships、readiness 和 blockers。
+8. 前端 Storyboard 工作区新增资产面板：按 character/scene/prop 分组，支持查看关联 shots、编辑、新增、删除和从 shot 侧调整关联。
+
+验收标准：
+
+- 用户可创建、编辑、删除角色/场景/道具资产。
+- 用户可看到每个资产被哪些 shots 使用。
+- 用户可调整每个 shot 的角色、场景、道具关系。
+- 删除资产不会留下悬空关系。
+- 资产或关系变化后，相关 shots 不再静默保持 prompt ready。
+- 最新资产和关系进入导出包。
+
+测试要求：
+
+- 新增 Storage 测试：asset create/update/delete、关系 set、跨项目拒绝、prompt ready invalidation。
+- 新增 Web 测试：asset API 和 relation API。
+- 如修改前端：`node --check src/vidiom/static/app.js`
+- 运行：`.venv/bin/python -m pytest tests/test_storyboard.py tests/test_web.py`
+- 运行：`git diff --check`
+
+是否允许/要求重构：要求小范围重构。允许把 asset/relation 校验抽成 helper；不允许引入跨项目资产库或 LibTV 资产栏全局系统。
+
+风险和注意事项：
+
+- 不要用 asset 名称作为关系主键。
+- 不要删除项目图像资产来实现 story asset 删除。
+- 不要把资产 CRUD 做成孤立备注；必须反映到相关 shots、readiness 和导出包。
+
+## Task 4: 完成项目图像关联审阅与导出摘要
+
+目标：让已有项目图像在 Storyboard 审阅中成为可管理的 shot 参考或分镜占位，而不是只在图像页孤立展示。
+
+产品需求来源：
+
+- 用户可以查看当前项目图像资产。
+- 用户可以把已有项目图像关联到 shot。
+- 用户可以移除 shot 与项目图像的关联。
+- 项目图像资产本身不会因为解除 shot 关联而消失。
+- 导出包包含最新 shot-image 关联摘要。
+- 图像关联应清楚区分参考图、分镜图占位或已有项目图像。
+
+影响文件/模块：
+
+- `src/vidiom/storage.py`
+- `src/vidiom/web.py`
+- `src/vidiom/static/app.js`
+- `src/vidiom/static/styles.css`
+- `tests/test_storyboard.py`
+- `tests/test_web.py`
+
+实现步骤：
+
+1. 保留现有 shot-image link/unlink API，并补齐前端移除能力；当前 UI 只需要关联已有项目图像，不触发新图像生成。
+2. 在 UI 中区分 `reference` 与 `storyboard_frame` 两类 link type；用户能选择关联类型。
+3. 在每个 shot 上展示已关联图像数量和 link type；在图像资产上展示被哪些 shots 使用。
+4. 解绑 shot-image link 时只删除 `storyboard_shot_image_assets` 关系，不删除 `generated_image_assets`。
+5. 关系变化后对应 shot 的 `prompt_ready=false`，由用户重新确认。
+6. 确认导出包包含最新 `image_links`，并能看出 image asset id、model、status、prompt 和 link type。
+
+验收标准：
+
+- 用户可以查看项目图像资产并关联到当前选中 shot。
+- 用户可以移除 shot-image 关联，项目图像资产仍在项目图像列表中。
+- 用户可以区分参考图与分镜图占位。
+- 每个 shot 能显示是否已有项目图像关联。
+- 导出包包含最新 shot-image 关联摘要。
+
+测试要求：
+
+- 保留并扩展 image link/unlink Storage 和 API 测试。
+- 新增导出测试，断言 link type 和 image asset 摘要。
+- 如修改前端：`node --check src/vidiom/static/app.js`
+- 运行：`.venv/bin/python -m pytest tests/test_storyboard.py tests/test_web.py`
+- 运行：`git diff --check`
+
+是否允许/要求重构：允许小范围重构。不得新增批量分镜图生成，不得自动调用 `gpt-image-2` 为每个 shot 生成图像。
+
+风险和注意事项：
+
+- 不要把解除关联实现成删除图片资产。
+- 不要把项目图像误标为已批量分镜生成结果。
+- 不要创建占位图片或假图像 URL。
+
+## Task 5: 建设 Storyboard 可编辑生产台前端体验
+
+目标：在现有 Studio Review 的 Storyboard 页内提供面向镜头生产的可扫描、可编辑、可过滤工作区，让用户能完成本轮关键流程。
+
+产品需求来源：
+
+- Storyboard 编辑体验应面向镜头生产，而不是普通长文本表单。
+- 用户应能快速扫描哪些 shots 需要处理，哪些已经确认。
+- 新增、删除、排序和编辑后的结果必须可追溯、可保存、可导出。
+- 资产编辑应清楚影响到哪些 shots。
+- 如果某个 shot 缺少关键字段，应以阻塞项形式提示用户。
+
+影响文件/模块：
+
+- `src/vidiom/static/index.html`
+- `src/vidiom/static/app.js`
+- `src/vidiom/static/styles.css`
+- `tests/test_web.py`
+
+实现步骤：
+
+1. 在 `app.js` 内整理 Storyboard 工作区函数边界，至少分为：
+   - 数据加载/保存 action。
+   - readiness summary 渲染。
+   - shot 列表和状态过滤。
+   - shot 详情编辑表单。
+   - asset 面板。
+   - relation editor。
+   - image link editor。
+2. Shot 列表支持按全部、未确认、需修改、已确认、prompt 未准备、有阻塞项筛选。
+3. Shot 详情表单支持编辑 Task 1 的所有核心字段；保存后重新加载 Storyboard 响应。
+4. 提供新增 shot、删除 shot、上移/下移或明确排序控件；排序后 UI 与后端 sequence 一致。
+5. 资产面板支持新增、编辑、删除，并显示关联 shots。
+6. 关系编辑在 shot 详情中可调整角色、场景、道具；保存后 readiness 与 prompt ready 状态立即更新。
+7. 图像关联编辑支持 reference/storyboard_frame 选择和解除关联。
+8. 不要在前端生成假成功结果；API 失败必须可见显示。
+
+验收标准：
+
+- 用户能在 Storyboard 页完成 shot 编辑、新增、删除、排序。
+- 用户能编辑资产并调整 shot-asset 关系。
+- 用户能关联和解除项目图像。
+- 用户能按状态定位待处理 shots。
+- 刷新后所有编辑仍可见。
+- 页面不会暴露 secret values，也不会显示假生成成功。
+
+测试要求：
+
+- `node --check src/vidiom/static/app.js`
+- 通过 `tests/test_web.py` 静态断言关键 API 路径、控件 data attribute 和状态文案存在。
+- 运行：`.venv/bin/python -m pytest tests/test_web.py`
+- 运行：`git diff --check`
+
+是否允许/要求重构：要求前端局部重构。允许整理 Storyboard 相关函数和 CSS；不允许引入大型框架迁移、自由无限画布或通用节点系统。
+
+风险和注意事项：
+
+- 不要把生产台做成纯展示卡片堆叠；需要可编辑控件和状态筛选。
+- 不要让长文本挤出按钮或覆盖相邻区域。
+- 不要把 UI 操作只存在浏览器内存。
+
+## Task 6: 回归、README 和真实模型链路保护
+
+目标：确保本轮 Storyboard 编辑和资产审阅不会破坏已经 completed 的真实模型主链路、项目图像和导出包能力。
+
+产品需求来源：
+
+- 现有真实模型配置继续保持：语言模型 `gpt-5.5`，图像模型 `gpt-image-2`，配置变量为 `HM_BASE_URL`、`HM_LLM_APIKEY`、`HM_IMG_APIKEY`。
+- Storyboard 生成、项目图像生成和导出包能力不得退化。
+- 最新真实 smoke completed 记录不得被删除或改写为未验收。
+- 常规自动化测试不得自动消耗真实模型额度。
+- 文档不得包含 secret values。
+
+影响文件/模块：
+
+- `README.md`
+- `docs/real-model-smoke-result.md`
+- `src/vidiom/smoke.py`
+- `tests/test_storyboard.py`
+- `tests/test_web.py`
+- `tests/test_smoke.py`
+
+实现步骤：
+
+1. 保持 `docs/real-model-smoke-result.md` 的 completed 记录，不要把它改写成未验收状态。
+2. 确认 Storyboard 生成 API 仍调用 `gpt-5.5`，项目图像生成仍调用 `gpt-image-2`。
+3. 确认编辑后的 Storyboard 不影响后续重新生成的失败/中断语义：失败或中断仍不能创建假结果，也不能清空旧 completed result。
+4. 更新 README 迭代记录，写明本轮 Storyboard 编辑台、资产审阅、图像关联、准备度摘要、测试结果和未做事项。
+5. 常规测试继续使用 fake clients；不要把真实 `.env` smoke 放进默认测试。
+6. 如开发手动运行真实 smoke，只能作为显式验收记录，并确保不写入 secret values。
+
+验收标准：
+
+- 全量单元测试通过。
+- `node --check src/vidiom/static/app.js` 通过。
+- `git diff --check` 通过。
+- README 记录本轮能力与测试结果。
+- 文档未包含实际 secret values。
+- `docs/real-model-smoke-result.md` 最新 completed 记录未被删除或改写成失败。
+
+测试要求：
+
+- `.venv/bin/python -m pytest`
+- `.venv/bin/python -m ruff check .`
+- `node --check src/vidiom/static/app.js`
+- `git diff --check`
+
+是否允许/要求重构：不要求。只做回归保护和文档同步。
+
+风险和注意事项：
+
+- 不要把本轮编辑功能误写为批量分镜图或视频生成完成。
+- 不要自动消耗真实模型额度。
+- 不要提交 `.env` 或任何密钥值。
