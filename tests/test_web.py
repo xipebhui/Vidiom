@@ -32,6 +32,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderBriefFields" in app_js
     assert "function projectListQuery" in app_js
     assert "function applyProjectFilters" in app_js
+    assert "function renderProjectRowProgress" in app_js
     assert "function startProjectPolling" in app_js
     assert "function pollRunningProject" in app_js
     assert "function renderRunProgress" in app_js
@@ -129,7 +130,20 @@ def test_list_projects_api_filters_by_status_and_query(tmp_path) -> None:
     completed_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
     failed_id = create_canvas_project(storage, "一个制片人在直播间遇到消失的主演。")
     storage.update_project_title(completed_id, "未来素材案")
+    storage.complete_canvas_node(
+        completed_id,
+        "premise",
+        {
+            "one_sentence_pitch": "剪辑师被未来素材拖进救援。",
+            "genre": "悬疑",
+            "target_audience": "18-35 岁短剧用户",
+            "emotional_hook": "错过报警的人必须补上选择。",
+            "story_promise": "每个素材细节都会变成救人的线索。",
+            "risk_flags": [],
+        },
+    )
     storage.update_project_status(completed_id, "completed")
+    storage.update_canvas_node_status(failed_id, "characters", "failed", "模型返回结构无效")
     storage.update_project_status(failed_id, "failed", "模型返回结构无效")
 
     app.dependency_overrides[get_settings] = override_settings
@@ -143,11 +157,23 @@ def test_list_projects_api_filters_by_status_and_query(tmp_path) -> None:
         app.dependency_overrides.clear()
 
     assert completed_response.status_code == 200
-    assert [project["id"] for project in completed_response.json()["projects"]] == [completed_id]
+    completed_projects = completed_response.json()["projects"]
+    assert [project["id"] for project in completed_projects] == [completed_id]
+    assert completed_projects[0]["progress"] == {
+        "completed": 1,
+        "total": 5,
+        "active_key": None,
+        "active_title": None,
+        "failed_key": None,
+        "failed_title": None,
+    }
     assert search_response.status_code == 200
     assert [project["id"] for project in search_response.json()["projects"]] == [completed_id]
     assert failed_search_response.status_code == 200
-    assert [project["id"] for project in failed_search_response.json()["projects"]] == [failed_id]
+    failed_projects = failed_search_response.json()["projects"]
+    assert [project["id"] for project in failed_projects] == [failed_id]
+    assert failed_projects[0]["progress"]["failed_key"] == "characters"
+    assert failed_projects[0]["progress"]["failed_title"] == "Character Agent"
     assert draft_id not in [project["id"] for project in search_response.json()["projects"]]
 
 

@@ -363,12 +363,12 @@ class Storage:
         conditions = []
         params: list[Any] = []
         if status is not None:
-            conditions.append("status = ?")
+            conditions.append("p.status = ?")
             params.append(status)
         if search is not None:
             clean_search = search.strip()
             if clean_search:
-                conditions.append("(seed_text LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')")
+                conditions.append("(p.seed_text LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\')")
                 pattern = _like_pattern(clean_search)
                 params.extend([pattern, pattern])
 
@@ -377,16 +377,31 @@ class Storage:
             rows = conn.execute(
                 f"""
                 SELECT
-                    id, inspiration_id, seed_text, brief_json, title,
-                    status, last_error, created_at, updated_at
-                FROM projects
+                    p.id, p.inspiration_id, p.seed_text, p.brief_json, p.title,
+                    p.status, p.last_error, p.created_at, p.updated_at,
+                    COALESCE(SUM(CASE WHEN n.kind = 'agent' THEN 1 ELSE 0 END), 0)
+                        AS progress_total,
+                    COALESCE(SUM(
+                        CASE WHEN n.kind = 'agent' AND n.status = 'completed' THEN 1 ELSE 0 END
+                    ), 0) AS progress_completed,
+                    MAX(CASE WHEN n.kind = 'agent' AND n.status = 'running' THEN n.node_key END)
+                        AS active_key,
+                    MAX(CASE WHEN n.kind = 'agent' AND n.status = 'running' THEN n.title END)
+                        AS active_title,
+                    MAX(CASE WHEN n.kind = 'agent' AND n.status = 'failed' THEN n.node_key END)
+                        AS failed_key,
+                    MAX(CASE WHEN n.kind = 'agent' AND n.status = 'failed' THEN n.title END)
+                        AS failed_title
+                FROM projects p
+                LEFT JOIN canvas_nodes n ON n.project_id = p.id
                 {where_clause}
-                ORDER BY id DESC
+                GROUP BY p.id
+                ORDER BY p.id DESC
                 LIMIT ?
                 """,
                 (*params, limit),
             ).fetchall()
-            return [_project_row(row) for row in rows]
+            return [_project_row(row, include_progress=True) for row in rows]
 
     def get_project(self, project_id: int) -> dict[str, Any]:
         with self.connect() as conn:
@@ -872,8 +887,8 @@ def _seed_output(seed_text: str, brief: dict[str, Any] | None) -> dict[str, Any]
     return output
 
 
-def _project_row(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+def _project_row(row: sqlite3.Row, include_progress: bool = False) -> dict[str, Any]:
+    project = {
         "id": row["id"],
         "inspiration_id": row["inspiration_id"],
         "seed_text": row["seed_text"],
@@ -884,6 +899,16 @@ def _project_row(row: sqlite3.Row) -> dict[str, Any]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+    if include_progress:
+        project["progress"] = {
+            "completed": row["progress_completed"],
+            "total": row["progress_total"],
+            "active_key": row["active_key"],
+            "active_title": row["active_title"],
+            "failed_key": row["failed_key"],
+            "failed_title": row["failed_title"],
+        }
+    return project
 
 
 def _node_row(row: sqlite3.Row) -> dict[str, Any]:

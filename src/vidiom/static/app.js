@@ -458,10 +458,21 @@ function renderProjects() {
     .map((project) => {
       const active = state.project?.id === project.id ? " active" : "";
       const title = escapeHtml(project.title || project.seed_text);
+      const progress = renderProjectRowProgress(project);
       return `
         <button class="project-row${active}" data-project-id="${project.id}">
-          <strong>${title}</strong>
-          <span>#${project.id} · ${escapeHtml(project.status)}</span>
+          <div class="project-row-head">
+            <strong>${title}</strong>
+            <span class="status-pill status-${escapeHtml(project.status)}">${escapeHtml(project.status)}</span>
+          </div>
+          <div class="project-row-seed">${escapeHtml(project.seed_text)}</div>
+          <div class="project-row-progress">
+            ${progress}
+          </div>
+          <div class="project-row-meta">
+            <span>#${project.id}</span>
+            <span>${escapeHtml(formatTime(project.updated_at))}</span>
+          </div>
         </button>
       `;
     })
@@ -1301,6 +1312,17 @@ function progressLabel(project, progress) {
       : `${progress.completed}/${progress.total} · paused`;
   }
   return `${progress.completed}/${progress.total} · draft`;
+}
+
+function renderProjectRowProgress(project) {
+  const progress = project.progress;
+  const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
+  return `
+    <div class="project-progress-label">${escapeHtml(progressLabel(project, progress))}</div>
+    <div class="progress-track" aria-label="Project agent progress">
+      <span style="width:${percent}%"></span>
+    </div>
+  `;
 }
 
 function syncProjectPolling() {

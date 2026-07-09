@@ -253,6 +253,15 @@ textarea:focus {
   color: var(--ink);
 }
 
+.project-row-head,
+.project-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
 .project-row.active {
   border-color: var(--teal);
   box-shadow: inset 3px 0 0 var(--teal);
@@ -260,6 +269,7 @@ textarea:focus {
 
 .project-row strong {
   display: block;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -267,15 +277,39 @@ textarea:focus {
   font-size: 13px;
 }
 
-.project-row span {
-  display: block;
+.project-row-seed {
+  display: -webkit-box;
   max-width: 100%;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.project-row-progress {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.project-progress-label,
+.project-row-meta {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.project-progress-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 12px;
+}
+
+.project-row-meta {
+  margin-top: 8px;
 }
 
 .canvas-panel {
@@ -415,12 +449,18 @@ textarea:focus {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   height: 22px;
   padding: 0 8px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 850;
   background: #e7ecec;
+  color: #516065;
+}
+
+.status-draft {
+  background: rgba(81, 96, 101, 0.12);
   color: #516065;
 }
 
