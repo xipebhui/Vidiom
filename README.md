@@ -133,6 +133,17 @@ vidiom scheduler
 
 ## 迭代记录
 
+### 2026-07-10 05:56 CST - 收口 Storyboard 中断状态并完成真实端到端验收
+
+- 对应需求文档条目：`docs/next-product-requirement.md` 的 “Complete Real Model End-to-End Acceptance”，要求真实 `gpt-5.5` agent、真实 `gpt-5.5` Storyboard、`gpt-image-2` 项目图像和导出包在同一轮真实 smoke 中全部 completed，并继续保证 failed、interrupted 和 incomplete 不被写成成功。
+- 对应架构师任务：`docs/development-task-breakdown.md` 的首要执行项 Task 1 “收口 Storyboard 真实生成生命周期与中断状态”，聚焦最新 `storyboard_generation=interrupted` 阻塞，补齐 Storage、API、Studio、smoke 和测试中的中断语义。
+- 本轮开发内容：Storyboard 状态模型新增 `interrupted`；真实 smoke 在 Storyboard 阶段收到 `KeyboardInterrupt` 时会同步把项目 Storyboard 落库为 interrupted，并保持项目图像和导出阶段 incomplete；Studio API 新增 `latest_attempt_interrupted`，前端可显示“本次生成中断”且继续明确下面展示的是上次成功结果；后台 Storyboard 任务中断会写入 interrupted 状态；更新 smoke 架构任务文案；新增 interrupted 保留旧成功结果、无旧成功不生成 shots、不导出假 Storyboard、API 可读字段和 smoke 中断落库测试。
+- 用户价值：用户、自动化和下一轮产品/架构任务现在能区分未开始、生成中、成功、失败、中断、失败/中断但保留旧成功结果；中断不会留下 generating 假象，也不会生成假 shots、假图像或假导出包。
+- 涉及文件/模块：`src/vidiom/storyboard_schema.py`、`src/vidiom/storage.py`、`src/vidiom/web.py`、`src/vidiom/smoke.py`、`src/vidiom/static/app.js`、`tests/test_storyboard.py`、`tests/test_smoke.py`、`tests/test_web.py`、`docs/real-model-smoke-result.md`、`README.md`。
+- 验证命令与结果：`.venv/bin/python -m pytest tests/test_storyboard.py tests/test_smoke.py tests/test_web.py` 通过，51 passed，1 个 StarletteDeprecationWarning 来自依赖；`.venv/bin/python -m ruff check .` 通过；`.venv/bin/python -m pytest` 通过，70 passed，1 个 StarletteDeprecationWarning 来自依赖；`node --check src/vidiom/static/app.js` 通过；`git diff --check` 通过；真实 `.env` smoke 已执行 `.venv/bin/vidiom smoke-real-model-storyboard --result-path docs/real-model-smoke-result.md` 并返回 completed，最新结果为 agent_project `gpt-5.5` completed 5/5 节点，storyboard_generation `gpt-5.5` completed 18 shots/18 assets/119 relationships，project_image_generation `gpt-image-2` completed 1 个项目图像资产，export_package completed。
+- 最新验收状态：当前最新 `docs/real-model-smoke-result.md` 为 completed；它不同于 2026-07-10 03:54 CST 的 provider 503 failed 记录，也不同于 2026-07-10 04:56 CST 的 Storyboard interrupted 记录。历史失败和中断说明真实 provider 长耗时/稳定性仍是风险，但本轮最新同轮四段验收已经通过。
+- 仍待处理事项：本轮没有实现 Storyboard 深度编辑、新增/删除/排序、批量分镜图、视频、音频、导演台或自由无限画布；下一轮应由产品/架构基于最新 completed smoke 判断是否继续真实模型稳定性观察，或切换到 LibTV 的 Storyboard 深度编辑、批量分镜图与资产工作台差距。
+
 ### 2026-07-10 04:56 CST - 强化真实 smoke 发布门禁
 
 - 对应需求文档条目：`docs/next-product-requirement.md` 的 “Real Model End-to-End Acceptance Gate”，要求真实 `gpt-5.5` agent、真实 `gpt-5.5` Storyboard、`gpt-image-2` 项目图像和导出包在同一轮真实 smoke 中全部 completed，任一 failed、interrupted 或 incomplete 均不能视为真实模型接入完成。

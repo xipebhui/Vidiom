@@ -699,7 +699,7 @@ class Storage:
                         model,
                         status,
                         now if status == "generating" else None,
-                        now if status in {"completed", "failed"} else None,
+                        now if status in {"completed", "failed", "interrupted"} else None,
                         error_message[:2000] if error_message else None,
                         now if status == "completed" else None,
                         model if status == "completed" else None,
@@ -771,7 +771,7 @@ class Storage:
                         ELSE generation_started_at
                     END,
                     generation_finished_at = CASE
-                        WHEN ? IN ('completed', 'failed') THEN ?
+                        WHEN ? IN ('completed', 'failed', 'interrupted') THEN ?
                         ELSE NULL
                     END,
                     generation_error_message = ?,
@@ -1054,6 +1054,7 @@ class Storage:
             "has_completed_result": storyboard_row["last_completed_at"] is not None
             and len(shot_rows) > 0,
             "latest_attempt_failed": storyboard_row["generation_status"] == "failed",
+            "latest_attempt_interrupted": storyboard_row["generation_status"] == "interrupted",
             "result_source": "last_completed_result"
             if storyboard_row["last_completed_at"] is not None and len(shot_rows) > 0
             else None,
@@ -2133,7 +2134,7 @@ def _ensure_storyboard_row(
             model,
             status,
             now if status == "generating" else None,
-            now if status in {"completed", "failed"} else None,
+            now if status in {"completed", "failed", "interrupted"} else None,
             error_message[:2000] if error_message else None,
             now if status == "completed" else None,
             model if status == "completed" else None,
@@ -2183,6 +2184,7 @@ def _storyboard_status_title(status: str) -> str:
         "generating": "Storyboard generation started",
         "completed": "Storyboard generation completed",
         "failed": "Storyboard generation failed",
+        "interrupted": "Storyboard generation interrupted",
     }
     return titles[status]
 
@@ -2193,6 +2195,7 @@ def _storyboard_status_description(status: str) -> str:
         "generating": "Storyboard generation is running.",
         "completed": "Storyboard generation completed.",
         "failed": "Storyboard generation failed.",
+        "interrupted": "Storyboard generation was interrupted before completion.",
     }
     return descriptions[status]
 

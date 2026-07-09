@@ -51,12 +51,12 @@ SMOKE_BRIEF = {
 }
 
 SMOKE_ACCEPTANCE_PRODUCT_REQUIREMENT = (
-    "`docs/next-product-requirement.md` Real Model End-to-End Acceptance Gate, "
+    "`docs/next-product-requirement.md` Complete Real Model End-to-End Acceptance, "
     "updated 2026-07-10 CST"
 )
 
 SMOKE_ACCEPTANCE_ARCHITECTURE_TASK = (
-    "`docs/development-task-breakdown.md` Task 1 强化真实 smoke 发布门禁"
+    "`docs/development-task-breakdown.md` Task 1 收口 Storyboard 真实生成生命周期与中断状态"
 )
 
 
@@ -323,6 +323,13 @@ def run_real_model_storyboard_smoke(
         )
         result.finish("completed")
     except KeyboardInterrupt:
+        if active_stage == "storyboard_generation" and result.project_id is not None:
+            storage.update_project_storyboard_status(
+                result.project_id,
+                status="interrupted",
+                model=settings.language_model,
+                error_message="Interrupted by user or external process.",
+            )
         if result.stages[active_stage].status == "running":
             result.interrupt_stage(active_stage)
         result.mark_remaining_incomplete(

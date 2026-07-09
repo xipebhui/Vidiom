@@ -587,6 +587,7 @@ def _storyboard_response(storage: Storage, project_id: int) -> dict:
             "image_links": [],
             "has_completed_result": False,
             "latest_attempt_failed": False,
+            "latest_attempt_interrupted": False,
             "result_source": None,
         }
     storyboard["image_assets"] = [
@@ -628,6 +629,14 @@ def _generate_storyboard_job(database_path: Path, project_id: int, model: str) -
             model=model,
             client=get_language_client(),
         )
+    except KeyboardInterrupt:
+        storage.update_project_storyboard_status(
+            project_id,
+            status="interrupted",
+            model=model,
+            error_message="Interrupted by user or external process.",
+        )
+        logger.exception("Storyboard project %s background generation interrupted.", project_id)
     except Exception as exc:
         try:
             storage.update_project_storyboard_status(

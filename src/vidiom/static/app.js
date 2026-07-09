@@ -1498,6 +1498,22 @@ function renderStoryboardStatus(storyboard, status, canGenerate) {
       </div>
     `;
   }
+  if (status === "interrupted" && storyboard.has_completed_result) {
+    return `
+      <div class="quality-summary status-failed">
+        <strong>本次生成中断</strong>
+        <span>${escapeHtml(storyboard.storyboard.generation_error_message || "Storyboard generation was interrupted.")}；下面是上次成功结果。</span>
+      </div>
+    `;
+  }
+  if (status === "interrupted") {
+    return `
+      <div class="quality-summary status-failed">
+        <strong>生成中断</strong>
+        <span>${escapeHtml(storyboard.storyboard.generation_error_message || "Storyboard generation was interrupted before completion.")}</span>
+      </div>
+    `;
+  }
   return `
     <div class="quality-summary status-completed">
       <strong>故事板已生成</strong>

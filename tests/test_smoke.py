@@ -11,6 +11,7 @@ import vidiom.cli as cli_module
 from vidiom.config import Settings
 from vidiom.providers import ImageGenerationResult
 from vidiom.smoke import run_real_model_storyboard_smoke, smoke_gate_completed
+from vidiom.storage import Storage
 
 runner = CliRunner()
 
@@ -103,19 +104,26 @@ def test_real_model_smoke_runner_records_keyboard_interrupt(
     tmp_path: Path,
 ) -> None:
     result_path = tmp_path / "result.md"
+    database_path = tmp_path / "smoke.sqlite3"
 
     result = run_real_model_storyboard_smoke(
         result_path=result_path,
-        database_path=tmp_path / "smoke.sqlite3",
+        database_path=database_path,
         settings=make_settings(tmp_path),
         language_client=FakeSmokeLanguageClient(interrupt_storyboard=True),
         image_client=FakeImageClient(),
     )
 
     stages = {stage["stage"]: stage for stage in result["stages"]}
+    persisted = Storage(database_path).get_project_storyboard(result["project_id"])
     assert result["overall_status"] == "interrupted"
     assert stages["storyboard_generation"]["status"] == "interrupted"
     assert stages["project_image_generation"]["status"] == "incomplete"
+    assert stages["export_package"]["status"] == "incomplete"
+    assert persisted is not None
+    assert persisted["storyboard"]["generation_status"] == "interrupted"
+    assert persisted["has_completed_result"] is False
+    assert persisted["shots"] == []
     assert "`interrupted`" in result_path.read_text(encoding="utf-8")
 
 

@@ -4,7 +4,7 @@ from typing import Any
 
 STORYBOARD_ASSET_TYPES = {"character", "scene", "prop"}
 STORYBOARD_REVIEW_STATUSES = {"pending", "needs_changes", "approved"}
-STORYBOARD_STATUSES = {"not_started", "generating", "completed", "failed"}
+STORYBOARD_STATUSES = {"not_started", "generating", "completed", "failed", "interrupted"}
 STORYBOARD_IMAGE_LINK_TYPES = {"reference", "storyboard_frame"}
 
 STORYBOARD_SCHEMA: dict[str, Any] = {

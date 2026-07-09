@@ -106,6 +106,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderStoryboardReview" in app_js
     assert "function renderStoryboardShot" in app_js
     assert "function renderStoryboardAssets" in app_js
+    assert "本次生成中断" in app_js
     assert "/storyboard/generate" in app_js
     assert "function renderQualityReview" in app_js
     assert "function qualityReport" in app_js
@@ -911,6 +912,62 @@ def test_storyboard_api_failed_attempt_keeps_previous_completed_result(
     assert storyboard["has_completed_result"] is True
     assert len(storyboard["shots"]) == 2
     assert "non-JSON" in storyboard["storyboard"]["generation_error_message"]
+
+
+def test_storyboard_api_interrupted_attempt_keeps_previous_completed_result(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    def interrupt_storyboard_job(database_path, project_id, model) -> None:
+        storage = Storage(database_path)
+        storage.migrate()
+        storage.update_project_storyboard_status(
+            project_id,
+            status="interrupted",
+            model=model,
+            error_message="Interrupted by user or external process.",
+        )
+
+    storage, project_id = completed_project_storage(tmp_path)
+    db_path = storage.db_path
+    storage.replace_project_storyboard(project_id, valid_storyboard_payload(), model="gpt-5.5")
+    monkeypatch.setattr(web_module, "_generate_storyboard_job", interrupt_storyboard_job)
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        generate_response = client.post(f"/api/projects/{project_id}/storyboard/generate")
+        refreshed_response = client.get(f"/api/projects/{project_id}/storyboard")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert generate_response.status_code == 200
+    storyboard = refreshed_response.json()
+    assert storyboard["storyboard"]["generation_status"] == "interrupted"
+    assert storyboard["latest_attempt_failed"] is False
+    assert storyboard["latest_attempt_interrupted"] is True
+    assert storyboard["has_completed_result"] is True
+    assert len(storyboard["shots"]) == 2
+    assert "Interrupted" in storyboard["storyboard"]["generation_error_message"]
 
 
 def test_storyboard_review_and_image_link_api(tmp_path) -> None:

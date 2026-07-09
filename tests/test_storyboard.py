@@ -165,6 +165,61 @@ def test_storyboard_failed_attempt_retains_completed_result(tmp_path: Path) -> N
     assert exported["has_completed_result"] is True
 
 
+def test_storyboard_interrupted_attempt_retains_completed_result(tmp_path: Path) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+    storyboard = storage.replace_project_storyboard(
+        project_id,
+        valid_storyboard_payload(),
+        model="gpt-5.5",
+    )
+    first_shot_id = storyboard["shots"][0]["id"]
+
+    storage.update_project_storyboard_status(
+        project_id,
+        status="interrupted",
+        model="gpt-5.5",
+        error_message="Interrupted by user or external process.",
+    )
+    refreshed = storage.get_project_storyboard(project_id)
+    package = storage.export_project_package(project_id)
+
+    assert refreshed is not None
+    assert refreshed["storyboard"]["generation_status"] == "interrupted"
+    assert refreshed["storyboard"]["generation_finished_at"] is not None
+    assert refreshed["storyboard"]["generation_error_message"] == (
+        "Interrupted by user or external process."
+    )
+    assert refreshed["has_completed_result"] is True
+    assert refreshed["latest_attempt_failed"] is False
+    assert refreshed["latest_attempt_interrupted"] is True
+    assert refreshed["shots"][0]["id"] == first_shot_id
+    exported = package["deliverables"]["storyboard"]
+    assert exported["storyboard"]["generation_status"] == "interrupted"
+    assert exported["has_completed_result"] is True
+
+
+def test_storyboard_interrupted_attempt_without_completed_result_creates_no_shots(
+    tmp_path: Path,
+) -> None:
+    storage, project_id = completed_project_storage(tmp_path)
+
+    storage.update_project_storyboard_status(
+        project_id,
+        status="interrupted",
+        model="gpt-5.5",
+        error_message="Interrupted by user or external process.",
+    )
+    refreshed = storage.get_project_storyboard(project_id)
+    package = storage.export_project_package(project_id)
+
+    assert refreshed is not None
+    assert refreshed["storyboard"]["generation_status"] == "interrupted"
+    assert refreshed["has_completed_result"] is False
+    assert refreshed["latest_attempt_interrupted"] is True
+    assert refreshed["shots"] == []
+    assert "storyboard" not in package["deliverables"]
+
+
 def test_storyboard_context_builder_includes_project_outputs_and_image_assets(
     tmp_path: Path,
 ) -> None:

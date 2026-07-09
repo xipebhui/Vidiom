@@ -1,12 +1,12 @@
 # Real Model Smoke Result
 
-- Run started at: `2026-07-09T20:48:42.312673+00:00`
-- Run finished at: `2026-07-09T20:56:31.647877+00:00`
-- Overall status: `interrupted`
-- Product requirement: `docs/next-product-requirement.md` Real Model End-to-End Acceptance Gate, updated 2026-07-10 CST
-- Architecture task: `docs/development-task-breakdown.md` Task 1 强化真实 smoke 发布门禁
+- Run started at: `2026-07-09T21:48:43.277348+00:00`
+- Run finished at: `2026-07-09T21:56:17.773074+00:00`
+- Overall status: `completed`
+- Product requirement: `docs/next-product-requirement.md` Complete Real Model End-to-End Acceptance, updated 2026-07-10 CST
+- Architecture task: `docs/development-task-breakdown.md` Task 1 收口 Storyboard 真实生成生命周期与中断状态
 - Acceptance scope: `smoke-real-model-storyboard` covers agent, Storyboard, project image and export package stages in one real end-to-end gate.
-- Database path: `/var/folders/v_/s3sfnkdj6c729_y_g57bc46r0000gn/T/vidiom-real-smoke-g_tkeved/vidiom.sqlite3`
+- Database path: `/var/folders/v_/s3sfnkdj6c729_y_g57bc46r0000gn/T/vidiom-real-smoke-ecf6q1vs/vidiom.sqlite3`
 - Project ID: `1`
 - Language model: `gpt-5.5`
 - Image model: `gpt-image-2`
@@ -16,21 +16,21 @@
 
 | Stage | Status | Model | Duration | Summary | Error |
 | --- | --- | --- | ---: | --- | --- |
-| `agent_project` | `completed` | `gpt-5.5` | 178.121 | Agent project completed 5/5 nodes. |  |
-| `storyboard_generation` | `interrupted` | `gpt-5.5` | 291.208 | Smoke run was interrupted before this stage completed. | Interrupted by user or external process. |
-| `project_image_generation` | `incomplete` | `` |  | Not completed because the smoke run was interrupted. |  |
-| `export_package` | `incomplete` | `` |  | Not completed because the smoke run was interrupted. |  |
+| `agent_project` | `completed` | `gpt-5.5` | 183.899 | Agent project completed 5/5 nodes. |  |
+| `storyboard_generation` | `completed` | `gpt-5.5` | 218.401 | Storyboard completed with 18 shots and 18 assets. |  |
+| `project_image_generation` | `completed` | `gpt-image-2` | 52.18 | Project image asset completed with gpt-image-2. |  |
+| `export_package` | `completed` | `` | 0.012 | Export package contains completed storyboard and project image assets. |  |
 
 ## Structured Result
 
 ```json
 {
-  "run_started_at": "2026-07-09T20:48:42.312673+00:00",
-  "run_finished_at": "2026-07-09T20:56:31.647877+00:00",
-  "duration_seconds": 469.335,
-  "overall_status": "interrupted",
+  "run_started_at": "2026-07-09T21:48:43.277348+00:00",
+  "run_finished_at": "2026-07-09T21:56:17.773074+00:00",
+  "duration_seconds": 454.496,
+  "overall_status": "completed",
   "project_id": 1,
-  "database_path": "/var/folders/v_/s3sfnkdj6c729_y_g57bc46r0000gn/T/vidiom-real-smoke-g_tkeved/vidiom.sqlite3",
+  "database_path": "/var/folders/v_/s3sfnkdj6c729_y_g57bc46r0000gn/T/vidiom-real-smoke-ecf6q1vs/vidiom.sqlite3",
   "result_path": "docs/real-model-smoke-result.md",
   "models": {
     "language": "gpt-5.5",
@@ -40,15 +40,15 @@
     {
       "stage": "agent_project",
       "status": "completed",
-      "started_at": "2026-07-09T20:48:42.316201+00:00",
-      "finished_at": "2026-07-09T20:51:40.437443+00:00",
-      "duration_seconds": 178.121,
+      "started_at": "2026-07-09T21:48:43.280542+00:00",
+      "finished_at": "2026-07-09T21:51:47.179916+00:00",
+      "duration_seconds": 183.899,
       "model": "gpt-5.5",
       "summary": "Agent project completed 5/5 nodes.",
       "error_message": null,
       "details": {
         "project_id": 1,
-        "title": "8:17异常帧",
+        "title": "08:17前交片",
         "agent_nodes": {
           "total": 5,
           "completed": 5,
@@ -60,36 +60,57 @@
     },
     {
       "stage": "storyboard_generation",
-      "status": "interrupted",
-      "started_at": "2026-07-09T20:51:40.437507+00:00",
-      "finished_at": "2026-07-09T20:56:31.645448+00:00",
-      "duration_seconds": 291.208,
+      "status": "completed",
+      "started_at": "2026-07-09T21:51:47.179998+00:00",
+      "finished_at": "2026-07-09T21:55:25.581062+00:00",
+      "duration_seconds": 218.401,
       "model": "gpt-5.5",
-      "summary": "Smoke run was interrupted before this stage completed.",
-      "error_message": "Interrupted by user or external process.",
-      "details": {}
+      "summary": "Storyboard completed with 18 shots and 18 assets.",
+      "error_message": null,
+      "details": {
+        "shot_count": 18,
+        "asset_count": 18,
+        "relationship_count": 119,
+        "image_link_count": 0,
+        "has_completed_result": true,
+        "latest_attempt_failed": false,
+        "result_source": "last_completed_result"
+      }
     },
     {
       "stage": "project_image_generation",
-      "status": "incomplete",
-      "started_at": null,
-      "finished_at": null,
-      "duration_seconds": null,
-      "model": null,
-      "summary": "Not completed because the smoke run was interrupted.",
+      "status": "completed",
+      "started_at": "2026-07-09T21:55:25.581171+00:00",
+      "finished_at": "2026-07-09T21:56:17.760980+00:00",
+      "duration_seconds": 52.18,
+      "model": "gpt-image-2",
+      "summary": "Project image asset completed with gpt-image-2.",
       "error_message": null,
-      "details": {}
+      "details": {
+        "image_asset_id": 1,
+        "artifact_url_present": false,
+        "b64_json_present": true,
+        "revised_prompt_present": true
+      }
     },
     {
       "stage": "export_package",
-      "status": "incomplete",
-      "started_at": null,
-      "finished_at": null,
-      "duration_seconds": null,
+      "status": "completed",
+      "started_at": "2026-07-09T21:56:17.761000+00:00",
+      "finished_at": "2026-07-09T21:56:17.773053+00:00",
+      "duration_seconds": 0.012,
       "model": null,
-      "summary": "Not completed because the smoke run was interrupted.",
+      "summary": "Export package contains completed storyboard and project image assets.",
       "error_message": null,
-      "details": {}
+      "details": {
+        "storyboard_generation_status": "completed",
+        "storyboard_shot_count": 18,
+        "storyboard_asset_count": 18,
+        "storyboard_relationship_count": 119,
+        "storyboard_image_link_count": 0,
+        "project_image_asset_count": 1,
+        "completed_project_image_asset_count": 1
+      }
     }
   ]
 }
