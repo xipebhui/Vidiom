@@ -1,125 +1,117 @@
-# Architecture Control Plan: Real Model Storyboard Acceptance
+# Architecture Control Plan: Real Model End-to-End Acceptance Gate
 
 更新时间：2026-07-10 CST
 
 ## 读取输入
 
-- 产品需求版本：`docs/next-product-requirement.md`，更新时间 2026-07-10 CST，主题为 Real Model Storyboard Acceptance。
-- 差距判断：`docs/product-gap-analysis.md` 将 P0 缺口从“Storyboard 真实模型能力未实现”更新为“真实模型端到端验收不可重复、长耗时状态和发布记录需要收口”。
-- LibTV 对齐目标：`docs/libtv-product-function-description.md` 要求脚本/故事板链路能把剧本拆成结构化 shot，提取角色/场景/道具，并为后续分镜图、视频片段和合成准备可信上游。
-- 模型接入约束：`docs/model-provider-integration.md` 固定语言模型 `gpt-5.5`、图像模型 `gpt-image-2`，生产 runtime 不得生成假结果；缺少配置或 provider 失败必须进入可见失败状态。
+- 产品需求版本：`docs/next-product-requirement.md`，更新时间 2026-07-10 CST，主题为 Real Model End-to-End Acceptance Gate。
+- 最新差距判断：`docs/product-gap-analysis.md` 将 P0 缺口锁定为真实 `.env` smoke 未通过；最新结果停在 `agent_project`，`gpt-5.5` provider 返回 503 `system_cpu_overloaded`，Storyboard、项目图像和导出均为 `incomplete`。
+- LibTV 对齐目标：`docs/libtv-product-function-description.md` 要求脚本/故事板链路提供可信 shot、角色、场景、道具和提示词上游，后续分镜图、视频、音频、导演台和合成都依赖这一层。
+- 模型接入约束：`docs/model-provider-integration.md` 固定语言模型 `gpt-5.5`、图像模型 `gpt-image-2`，配置来自 `HM_BASE_URL`、`HM_LLM_APIKEY`、`HM_IMG_APIKEY`；生产 runtime 不得生成假结果，provider 或配置失败必须可见。
+- 最新真实验收记录：`docs/real-model-smoke-result.md` 总状态为 `failed`，`agent_project` 使用 `gpt-5.5` 等待 73.444 秒后失败，错误摘要为 provider 503 `system_cpu_overloaded`。
 
 ## 当前实现状态
 
-- 最新提交：`21713d0 Update product requirement for storyboard model acceptance`，当前 `main` 与 `origin/main` 对齐。
-- 上一轮实现提交：`fcc1a57 Implement real storyboard generation workflow` 已落地真实 Storyboard generation attempt 状态模型、`gpt-5.5` Storyboard generator、Storyboard Web API、Studio 故事板页、shot 审阅、图像关联和导出包。
-- 工作区存在未跟踪 `tmp-image/`，视为 LibTV 参考截图目录，本轮继续不纳入文档提交。
-- README 迭代记录显示上一轮自动化测试通过，且一次真实 `.env` smoke 通过：agent 完成 5/5 节点，Storyboard `gpt-5.5` completed，`gpt-image-2` 图像资产 completed，导出包包含 Storyboard。
-- 产品任务本轮独立复验时 `.env` 存在，但真实配置 smoke 在语言 agent provider 调用阶段等待超过三分钟后被中断，未完成 agent、Storyboard、图像和导出四段端到端链路。
-- 当前 `src/vidiom/storyboard.py` 已有 `StoryboardContextBuilder`、`OpenAIStoryboardGenerator` 和 `generate_project_storyboard()`，但真实 provider 调用没有可复用的 smoke runner、阶段耗时记录或中断后的可交接验收结果。
-- 当前 `src/vidiom/web.py` 使用 `BackgroundTasks` 运行 agent 与 Storyboard job；API 能表达 Storyboard `generating`、`completed`、`failed` 和保留旧成功结果，但真实长耗时时缺少面向验收的阶段级运行记录。
-- 当前前端仍是无构建静态 Studio，已出现 Storyboard tab；长期仍需要前端模块化和 LibTV 式画布/资产/任务架构，但本轮产品明确不切换到无限画布、视频、音频或导演台。
-- 当前测试覆盖 Storyboard storage、schema、generator、API、frontend smoke 和导出回归；缺少真实 `.env` 端到端 smoke 脚本、阶段化验收产物和 README 中对“上次通过、本轮复验超时”的统一解释。
+- 最新提交：`6521f35 Update product requirement for real model acceptance gate`，当前分支 `main` 与 `origin/main` 对齐。
+- 上一轮开发提交：`8b24c8f Add real model storyboard smoke runner` 已新增 `src/vidiom/smoke.py`、`vidiom smoke-real-model-storyboard` 和 `docs/real-model-smoke-result.md`，能够按 `agent_project`、`storyboard_generation`、`project_image_generation`、`export_package` 四段记录真实 smoke 状态。
+- 工作区存在未跟踪 `tmp-image/`，视为 LibTV 参考截图目录，本轮不纳入架构文档提交。
+- README 已记录上一轮真实 smoke 曾通过，也记录最新真实 smoke 失败：`agent_project` 阶段 provider 503，后续三段 `incomplete`。该历史成功只能证明能力曾经走通，不能覆盖最新失败。
+- `src/vidiom/smoke.py` 已有 `RealModelSmokeRun`、阶段状态集合、错误脱敏、结果 markdown 写入、fake-client 测试入口和真实 provider 调用编排。
+- `src/vidiom/cli.py` 已暴露 `smoke-real-model-storyboard`，但当前命令只打印 `overall_status`，失败时是否作为发布门禁的非通过结果仍需开发收口。
+- `write_smoke_result_markdown()` 当前仍写着 “Real Model Storyboard Acceptance” 和 “Task 1 real `.env` end-to-end smoke runner”，需要更新为本轮产品需求与本轮开发任务口径，避免下一轮自动化误读。
+- Storyboard 存储、API、Studio 审阅、shot review、项目图像关联和导出包已具备；当前 P0 不再是缺少数据底座，而是最新真实模型链路未通过。
+- 常规测试结构已覆盖 fake provider 的 smoke success、配置缺失、图像配置缺失、无效 Storyboard payload 和 KeyboardInterrupt；真实 `.env` smoke 仍必须显式手动执行，不应进入普通 pytest。
 
 ## 架构判断
 
-现有架构已经支撑本轮产品所需的 Storyboard 领域模型、持久化、API、Studio 展示、最小审阅和导出语义。本轮不应把首要开发任务设为新的 Storyboard UI 或下游 LibTV 能力，也不需要推翻已完成的 Storyboard 存储结构。
+现有架构已经支撑本轮产品所需的 Storyboard 领域模型、项目图像资产、导出包和显式真实 smoke runner。本轮不应把首要任务设为新增 LibTV 下游能力，也不应重写前端为无限画布。
 
-本轮真正阻碍发布的是真实模型验收闭环：一次真实 smoke 通过不能证明链路可重复，产品复验又暴露了语言 provider 长时间等待且无可交接阶段结果的问题。因此，本轮首要开发任务应是验收基础设施与运行状态收口，而不是继续堆叠功能。
+当前阻塞发布的是验收门槛和发布状态控制：最新真实 smoke 在第一段真实语言模型调用失败，后续 Storyboard、图像和导出没有同一轮完成证据。只要 `docs/real-model-smoke-result.md` 最新总状态不是 `completed`，产品侧就不能判断真实模型接入完成。
 
 本轮架构结论：
 
-- 前端架构：本轮足够支撑 Storyboard 状态查看和审阅，但仍需保持 Storyboard 逻辑边界；不启动自由无限画布重构。
-- 后端存储：Storyboard 一等表结构和 generation attempt 语义可继续沿用；需要补充真实 smoke run 记录或等价验收产物，避免 README、产品复验和实现状态互相矛盾。
-- 数据模型：继续以 project、canvas nodes、generated image assets、storyboards、shots、story assets、shot-image links 为主，不把 Storyboard 回写成 agent 节点长文本。
-- API 边界：现有 Storyboard API 可用；本轮只允许为状态观测和 smoke 验收补小边界，不新增视频、音频、导演台或跨项目资产库 API。
-- 异步任务：`BackgroundTasks` 可继续用于 Studio 生成；真实 smoke runner 应从 CLI 或测试脚本层面顺序执行并记录阶段结果，避免只依赖浏览器轮询判断。
-- Provider 抽象：继续复用 `OpenAICompatibleLanguageClient` 和 `OpenAICompatibleImageClient`；不加入备用模型、假数据或默认降级路径。
-- 测试结构：现有 fake-client 自动化测试继续保留；新增真实 `.env` smoke 只作为显式手动/验收命令，不应让常规 pytest 消耗模型额度。
-- README 迭代记录：必须同步写明自动化测试状态、真实 smoke 是否通过、若未通过具体停在哪个阶段，以及和上一轮通过记录的关系。
+- 前端架构：现有静态 Studio 可支撑本轮 Storyboard 状态查看和失败提示；长期仍撑不住 LibTV 式无限画布、节点系统、资产栏、历史记录、视频/音频和导演台，后续推进这些能力前必须重构前端模块边界。本轮不启动该重构。
+- 后端存储：当前 project、canvas nodes、generated image assets、storyboards、shots、story assets、shot-image links 可支撑本轮需求；不需要新增数据库迁移来解决 provider 503。若后续要长期记录 smoke 历史，可另行设计一等验收记录表，但本轮产品只要求最新验收记录可读。
+- 数据模型：继续保持 Storyboard 为一等领域对象，不把 Storyboard、图像或导出结果伪装成 agent 节点长文本；失败和旧成功结果必须通过状态字段区分。
+- API 边界：现有 Storyboard API 可用；本轮只允许补状态观测、错误脱敏和导出校验边界，不新增视频、音频、导演台、跨项目资产库或自由画布 API。
+- 异步任务：Studio 仍可用 `BackgroundTasks`；真实 smoke runner 应保持 CLI 顺序执行和阶段记录。provider 长时间等待、失败或中断时必须留下可交接状态，不能只依赖 server log。
+- Provider 抽象：继续复用 `OpenAICompatibleLanguageClient` 和 `OpenAICompatibleImageClient`。不得自动改用其他模型、备用 provider、假数据或占位结果。调用超时、自动重试、排队等待等调用策略均为“需用户确认”，不能作为本轮既定实现。
+- 测试结构：常规测试继续使用 fake clients，不消耗真实模型额度；真实 `.env` smoke 作为显式验收命令，结果写入 `docs/real-model-smoke-result.md`。
+- README 迭代记录：必须明确区分历史通过与最新失败，且以最新真实 smoke 结果判断当前发布状态。
 
 ## 本轮架构决策
 
-### 1. 首要改造：真实端到端 smoke runner 与验收记录
+### 1. 首要任务改为验收门禁强化，而非新增 runner
 
-新增一个显式验收入口，按产品链路顺序执行：
+上一轮已经建立 `vidiom smoke-real-model-storyboard`。本轮开发首要任务是把它升级为真实发布门禁：
 
-1. 使用 `HM_BASE_URL`、`HM_LLM_APIKEY`、`gpt-5.5` 创建并运行 agent 项目。
-2. 等待 Premise、Character、Beat、Script、Production 节点完成，记录每阶段开始、结束、耗时、状态和错误摘要。
-3. 使用同一语言模型触发 Storyboard 生成，记录生成状态、shot 数、asset 数、错误摘要和是否保留旧成功结果。
-4. 使用 `HM_BASE_URL`、`HM_IMG_APIKEY`、`gpt-image-2` 生成或复验一个项目图像资产。
-5. 导出项目包并校验 Storyboard metadata、shots、assets、relations、image links 和 project image assets 摘要。
-6. 将本次 smoke 结果写入一个可被下一轮产品/架构任务读取的验收文件，例如 `docs/real-model-smoke-result.md`。
+1. 最新 `docs/real-model-smoke-result.md` 是唯一真实模型接入状态判断来源。
+2. `overall_status=completed` 只允许在 agent、Storyboard、项目图像和导出四段均 `completed` 且关键计数有效时出现。
+3. 任一阶段为 `failed`、`interrupted` 或 `incomplete` 时，命令输出、结果文件、README 和开发交接都必须保持未通过判断。
+4. CLI 应让自动化能识别失败状态；失败、interrupted 或 incomplete 不应被当作成功发布结果。
+5. 结果 markdown 的产品需求名、架构任务名和阶段摘要必须更新到本轮 End-to-End Acceptance Gate，不继续写旧 Storyboard Acceptance 口径。
 
-该 runner 只做验收编排和状态记录，不引入备用模型、假 payload 或自动改走其他 provider。若开发认为需要 provider 调用超时策略，只能在文档中标为“需用户确认”，不得作为既定实现写入。
+### 2. Provider 503 是发布阻塞，不是功能通过
 
-### 2. 长耗时、中断和未完成状态语义
+最新失败来自 `gpt-5.5` provider 503 `system_cpu_overloaded`。架构上按以下规则处理：
 
-产品要求用户能区分未开始、生成中、真实成功、真实失败、用户中断或任务未完成，以及已有旧成功结果但本次未成功。现有 Storyboard generation attempt 已覆盖 Storyboard 层的 completed/failed/generating 和旧结果保留；本轮需要把 smoke 验收阶段也结构化：
+- 503 必须记录为对应阶段 `failed`，不得写成 `completed`。
+- 后续未执行阶段必须保持 `incomplete` 或等价未完成状态。
+- 不得使用上一轮成功结果覆盖最新失败。
+- 不得生成假 agent 输出、假 Storyboard、假图像资产或假导出包。
+- 如果开发认为需要超时、重试、排队等待或验收窗口策略，只能在文档中标为“需用户确认”，不得直接实现为默认行为。
 
-- `not_started`：阶段尚未触发。
-- `running`：阶段已开始且仍在等待 provider 或后台任务。
-- `completed`：阶段真实完成并通过结构校验。
-- `failed`：provider、配置、schema、存储或导出错误。
-- `interrupted`：验收 runner 被用户或外部进程中断。
-- `incomplete`：总链路未完成，且不能写成通过。
+### 3. 旧成功结果与本次失败必须隔离
 
-这些状态用于验收记录和 README，不要求本轮扩大到完整任务队列系统。UI 已有生成中与失败显示；开发只需补足验收产物能说明真实 smoke 卡在哪个阶段。
+当前 Storyboard 层已有 `has_completed_result`、`latest_attempt_failed`、`result_source` 等语义。本轮要求把同样原则应用到真实 smoke 与 README：
 
-### 3. API 与异步任务边界
-
-本轮不重写 `BackgroundTasks` 架构。开发需要确认现有 API 响应满足：
-
-- Storyboard 生成 POST 后立即落库 `generating`。
-- 后台成功后落库 `completed` 和完整 shots/assets/relations。
-- 后台失败后落库 `failed` 和 sanitised error message。
-- 已有成功结果后再次失败时保留旧 shots，并通过 `has_completed_result`、`latest_attempt_failed`、`result_source` 或等价字段说明来源。
-- 导出包只把明确存在的 completed Storyboard 作为交付结果，同时保留 latest attempt metadata。
-
-若真实 smoke 证明 agent provider 长时间等待时用户侧看不到足够状态，开发可补充运行阶段活动记录或 README 说明，但不得把等待包装成成功。
+- README 可保留历史真实 smoke 通过记录，但必须注明它不是最新验收。
+- 最新真实 smoke 失败时，产品、架构和开发文档都不能写“真实模型接入完成”。
+- 已有 completed Storyboard 可在 Studio 中显示为旧成功结果，但本次失败尝试必须可见。
+- 导出包只允许包含明确存在的 completed Storyboard；未生成、失败且无旧成功结果、或本次 smoke 未完成时，不得被描述为本轮导出通过。
 
 ### 4. 前端长期架构约束
 
-用户已明确判断当前架构撑不住 LibTV 级产品，需要允许适时重构前端架构和后端存储结构。该约束继续有效：
+用户已明确判断当前架构撑不住 LibTV 级产品，该判断继续作为长期约束：
 
-- 当前单文件 `app.js` 只能作为短期 Studio 壳使用；后续推进自由无限画布、节点系统、资产栏、历史记录、视频/音频/导演台时，必须拆成模块化前端边界。
-- 本轮产品目标仍是真实 Storyboard 验收封口，不能借此启动大规模前端重构。
-- 新增 smoke 状态 UI 或文案时，应放在现有 Storyboard/Delivery 边界内，不把验收逻辑散落到脚本、拍摄、图像多个页面。
+- 单文件 `src/vidiom/static/app.js` 只适合作为短期 Studio 壳；后续进入无限画布、自由节点、资产栏、历史记录、视频/音频和导演台前，必须拆出画布状态、节点渲染、资产面板、生成任务和审阅工作区边界。
+- 本轮产品需求明确不做自由无限画布、批量分镜图、视频、音频或导演台，因此不把前端重构列为首要开发任务。
+- 本轮如需改 UI，只能围绕真实 smoke/Storyboard 状态可读性、旧成功结果提示和错误脱敏做最小改动。
 
 ### 5. 后端长期数据模型方向
 
-后端继续坚持一等领域表，而不是把所有能力塞进 JSON blob：
+后端继续坚持一等领域表和清晰边界：
 
-- 项目、agent 节点、Storyboard、shot、项目内故事资产、项目图像资产、shot-image link 继续保持独立结构。
-- 后续 LibTV 对齐的画布节点、视频资产、音频资产、导演台构图、生成任务历史应新增领域边界和迁移，不复用 Storyboard 表承载无关能力。
-- 本轮只允许新增 smoke run 记录文件或轻量验收记录结构，不做跨项目资产库迁移。
+- 当前 project、canvas nodes、generated image assets、storyboards、storyboard_shots、project_story_assets、storyboard_shot_assets、storyboard_shot_image_assets 保持独立。
+- 后续 LibTV 对齐的画布节点、视频资产、音频资产、导演台构图、生成任务历史和跨项目资产库应新增领域边界与迁移，不复用 Storyboard 表承载无关能力。
+- 本轮只要求最新 smoke 结果文件可信；如未来需要多轮验收追踪，再设计 `smoke_runs`/`smoke_run_stages` 或等价结构，不在本轮预先扩张。
 
 ### 6. 测试策略
 
-本轮新增测试与验证分两层：
+本轮开发必须保持两层验证：
 
-- 自动化测试：继续使用 fake clients，覆盖 smoke runner 的阶段状态转换、错误脱敏、导出校验、README/验收文件写入格式和现有 Storyboard/API 回归。
-- 真实验收：新增显式命令，读取 `.env` 并调用真实 `gpt-5.5` 与 `gpt-image-2`，结果写入验收文件；该命令不得在普通 pytest 中自动运行。
+- 自动化测试：fake provider 覆盖 smoke success、provider 503/错误、缺配置、无效 payload、KeyboardInterrupt、CLI 失败门禁和结果 markdown 文案。
+- 真实验收：显式执行 `vidiom smoke-real-model-storyboard --result-path docs/real-model-smoke-result.md`，用真实 `.env` 调用 `gpt-5.5` 与 `gpt-image-2`，并把结果写入 README 与验收文件。
 
-必须继续运行：
+最低验证命令：
 
 - `.venv/bin/python -m ruff check .`
 - `.venv/bin/python -m pytest`
 - `node --check src/vidiom/static/app.js`
+- `git diff --check`
+- `vidiom smoke-real-model-storyboard --result-path docs/real-model-smoke-result.md`（显式真实验收，允许失败但必须记录真实状态）
 
-如真实 `.env` smoke 未通过，README 和验收文件必须记录具体阶段、耗时、状态和错误摘要，不能写成通过。
+## 当前风险与控制
 
-## 风险与控制
-
-- 风险：把 README 上一次真实 smoke 通过误读为当前可发布。控制：本轮要求写入新的可重复验收结果，并解释本轮三分钟等待中断发生在 agent provider 阶段。
-- 风险：真实 provider 长时间等待时没有可交接状态。控制：smoke runner 记录阶段、耗时和 interrupted/incomplete 状态。
-- 风险：为了收口验收而加入备用模型或假结果。控制：禁止备用模型、假 shot、占位 Storyboard 和默认降级路径；超时策略如需引入必须标为需用户确认。
-- 风险：继续堆 Storyboard UI 或切换到视频/音频/导演台，绕开真实模型稳定性问题。控制：本轮开发任务只来自 Real Model Storyboard Acceptance。
-- 风险：真实 smoke 输出泄露密钥。控制：只记录变量名、阶段、模型名和错误摘要，不输出 `.env` 值。
-- 风险：真实 smoke 脚本依赖浏览器手工操作，下一轮产品无法复验。控制：提供 CLI/脚本化入口和结构化结果文件。
+- 风险：CLI 失败时仍以普通成功退出，自动化无法把真实 smoke 当作发布门禁。控制：开发任务要求补 CLI/测试，使非 completed 状态可被自动化识别。
+- 风险：结果文件仍写旧产品需求名，下一轮产品任务误读本轮验收对象。控制：开发任务要求更新 smoke markdown 元数据。
+- 风险：README 历史通过记录掩盖最新 503。控制：README 必须按时间明确历史通过与最新失败，当前状态以最新结果为准。
+- 风险：provider 503 被视为外部偶发而切换到其他 LibTV 功能。控制：最新真实 smoke 未 completed 前，下一轮仍围绕真实模型验收。
+- 风险：为绕过 503 引入备用模型、假数据或占位成功。控制：本轮禁止；调用策略调整必须标为“需用户确认”。
+- 风险：错误摘要泄露密钥。控制：继续复用/扩展脱敏逻辑，只记录变量名、模型名、阶段和 provider 错误摘要。
 
 ## 为什么能支撑 LibTV 对齐
 
-LibTV 的脚本/故事板链路要求上游 shot、资产和 prompt 可信，后续分镜图、视频片段、音频和合成才能建立在稳定数据上。Vidiom 当前已经有 Storyboard 存储、真实生成、Studio 审阅和导出基础；本轮如果不先解决真实模型验收可重复性，就会把后续 LibTV 能力建立在不可判断的 provider 等待和发布记录冲突之上。
+LibTV 的脚本/故事板能力要求上游 shot、资产和 prompt 可信。Vidiom 当前已经有 Storyboard 领域模型和真实 smoke runner，但最新真实验收停在 `gpt-5.5` agent 阶段。若不先把最新验收门槛、失败状态和文档判断收口，后续批量分镜图、视频、音频、导演台和无限画布都会建立在未通过的模型主链路上。
 
-因此，本轮架构控制选择先补真实 smoke 验收闭环、长耗时/中断状态和文档一致性。完成后，下一轮产品才有依据判断是否进入更深 Storyboard 编辑、批量分镜图、自由画布或视频能力。
+因此，本轮架构控制选择先强化真实端到端验收门禁与 provider 503 发布阻塞处理。只有最新 `docs/real-model-smoke-result.md` 显示四段均 `completed`，产品侧才有依据切换到下一类 LibTV 差距。
