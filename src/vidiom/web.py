@@ -145,6 +145,20 @@ def duplicate_project(
     return _project_response(storage, duplicate_id)
 
 
+@app.post("/api/projects/{project_id}/reset")
+def reset_project(
+    project_id: int,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        storage.reset_failed_project(project_id)
+        return _project_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.patch("/api/projects/{project_id}")
 def update_project(
     project_id: int,

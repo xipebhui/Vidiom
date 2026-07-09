@@ -21,6 +21,7 @@ const el = {
   refreshProjects: document.querySelector("#refreshProjects"),
   exportProject: document.querySelector("#exportProject"),
   duplicateProject: document.querySelector("#duplicateProject"),
+  resetProject: document.querySelector("#resetProject"),
   runProject: document.querySelector("#runProject"),
   projectSearch: document.querySelector("#projectSearch"),
   projectStatusFilter: document.querySelector("#projectStatusFilter"),
@@ -42,6 +43,7 @@ el.createProject.addEventListener("click", createProject);
 el.refreshProjects.addEventListener("click", loadProjects);
 el.exportProject.addEventListener("click", downloadProjectExport);
 el.duplicateProject.addEventListener("click", duplicateProject);
+el.resetProject.addEventListener("click", resetProject);
 el.runProject.addEventListener("click", runProject);
 el.projectSearch.addEventListener("input", applyProjectFilters);
 el.projectStatusFilter.addEventListener("change", applyProjectFilters);
@@ -267,6 +269,25 @@ async function duplicateProject() {
   }
 }
 
+async function resetProject() {
+  if (!state.project || state.project.status !== "failed") return;
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}/reset`, { method: "POST" });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    state.selectedKey = activeNodeKey(state.progress) || "seed";
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 function render() {
   renderHeader();
   renderProjects();
@@ -281,6 +302,7 @@ function renderHeader() {
   el.runProject.disabled = !project || state.running || project.status === "running";
   el.exportProject.disabled = !project || state.running || !projectCanExport(project);
   el.duplicateProject.disabled = !project || state.running;
+  el.resetProject.disabled = !project || state.running || project.status !== "failed";
   el.canvasTitle.textContent = project?.title || "Untitled";
   el.canvasMeta.textContent = project ? `#${project.id} · ${project.status}` : "";
   el.projectStatus.textContent = project ? project.status : "Ready";
@@ -811,6 +833,7 @@ function setBusy(isBusy) {
   el.refreshProjects.disabled = isBusy;
   el.exportProject.disabled = isBusy || !state.project || !projectCanExport(state.project);
   el.duplicateProject.disabled = isBusy || !state.project;
+  el.resetProject.disabled = isBusy || !state.project || state.project.status !== "failed";
   renderHeader();
 }
 

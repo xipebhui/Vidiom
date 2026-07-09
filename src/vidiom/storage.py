@@ -546,7 +546,12 @@ class Storage:
                 clean_seed_text if clean_seed_text is not None else project["seed_text"]
             )
             next_title = clean_title if title is not None else project["title"]
-            next_brief = brief if brief is not None else _json_from_column(project["brief_json"])
+            current_brief = _json_from_column(project["brief_json"])
+            next_brief = brief if brief is not None else current_brief
+            seed_changed = (
+                clean_seed_text is not None and clean_seed_text != project["seed_text"]
+            )
+            brief_changed = brief is not None and brief != current_brief
             conn.execute(
                 """
                 UPDATE projects
@@ -570,6 +575,50 @@ class Storage:
                 WHERE project_id = ? AND node_key = 'seed'
                 """,
                 (_json_or_none(_seed_output(next_seed_text, next_brief)), now, project_id),
+            )
+            if seed_changed or brief_changed:
+                conn.execute(
+                    """
+                    UPDATE canvas_nodes
+                    SET status = 'pending', output_json = NULL, error = NULL, updated_at = ?
+                    WHERE project_id = ? AND kind = 'agent'
+                    """,
+                    (now, project_id),
+                )
+
+    def reset_failed_project(self, project_id: int) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, status
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            if project["status"] != "failed":
+                raise RuntimeError("Only failed projects can be reset.")
+
+            conn.execute(
+                """
+                UPDATE projects
+                SET status = 'draft', last_error = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, project_id),
+            )
+            conn.execute(
+                """
+                UPDATE canvas_nodes
+                SET status = 'pending', output_json = NULL, error = NULL, updated_at = ?
+                WHERE project_id = ?
+                  AND kind = 'agent'
+                  AND status != 'completed'
+                """,
+                (now, project_id),
             )
 
     def update_canvas_node_status(

@@ -12,6 +12,7 @@ Vidiom 是一个从“一句话”生成短剧的 agent 画布产品。用户输
 - Review 面板支持脚本节拍/对白、角色动机/故事引擎、拍摄清单/镜头计划审阅
 - 运行 Agent 会立即进入后台生成，画布、进度条和 Timeline 会自动刷新节点状态
 - Timeline 面板展示项目创建、每个 agent 节点状态、更新时间、输出摘要和错误
+- 失败项目可一键重置为 draft，保留已完成节点并清理失败节点，便于调整 Brief 后继续迭代
 - 完成项目可从 Studio 下载包含脚本、拍摄包和 agent 输出的 JSON 成片包
 - Agent 画布工作流：Premise Agent、Character Agent、Beat Agent、Script Agent、Production Agent
 - 使用 OpenAI Responses API 生成 JSON 结构化短剧
@@ -32,7 +33,7 @@ vidiom serve
 
 打开 `http://127.0.0.1:8000`。
 
-在 Studio 中创建画布前，可设置时长、画幅、语气、目标观众和必含要素。项目列表支持按标题/一句话搜索，并可按 draft、running、completed、failed 状态筛选。创建画布后，选中 Seed 节点可编辑草稿标题、一句话和创作 Brief；任意项目都可从顶部复制为新的 draft，继续改写而不覆盖原项目。运行 Agent 后项目立即进入后台生成，画布节点、顶部进度和 Timeline 会自动刷新；Review 面板可切换查看脚本对白、角色设计和拍摄包。项目完成后可点击顶部下载按钮导出 JSON 成片包。
+在 Studio 中创建画布前，可设置时长、画幅、语气、目标观众和必含要素。项目列表支持按标题/一句话搜索，并可按 draft、running、completed、failed 状态筛选。创建画布后，选中 Seed 节点可编辑草稿标题、一句话和创作 Brief；任意项目都可从顶部复制为新的 draft，继续改写而不覆盖原项目。运行 Agent 后项目立即进入后台生成，画布节点、顶部进度和 Timeline 会自动刷新；失败项目可从顶部重置为 draft，清理失败节点后继续编辑或重跑。Review 面板可切换查看脚本对白、角色设计和拍摄包。项目完成后可点击顶部下载按钮导出 JSON 成片包。
 
 必须配置：
 

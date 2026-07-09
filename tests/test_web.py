@@ -16,6 +16,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
 
     assert 'id="exportProject"' in index_html
     assert 'id="duplicateProject"' in index_html
+    assert 'id="resetProject"' in index_html
     assert 'id="runProgress"' in index_html
     assert 'id="projectSearch"' in index_html
     assert 'id="projectStatusFilter"' in index_html
@@ -33,6 +34,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderRunProgress" in app_js
     assert "async function downloadProjectExport" in app_js
     assert "async function duplicateProject" in app_js
+    assert "async function resetProject" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
 
@@ -183,6 +185,59 @@ def test_update_draft_project_api_updates_seed_node(tmp_path) -> None:
     assert project["nodes"][0]["output"]["brief"]["must_include"] == "结尾保留新倒计时"
 
 
+def test_update_draft_project_api_clears_stale_agent_outputs(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(
+        project_id,
+        "premise",
+        {
+            "one_sentence_pitch": "旧 seed 的故事承诺",
+            "genre": "悬疑",
+            "target_audience": "18-35 岁短剧用户",
+            "emotional_hook": "旧情绪钩子",
+            "story_promise": "旧线索会回收",
+            "risk_flags": [],
+        },
+    )
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}",
+            json={
+                "seed_text": "一个制片人在直播间看见消失主演的求救弹幕。",
+                "brief": {"duration_minutes": 3, "aspect_ratio": "9:16 vertical"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    nodes = {node["key"]: node for node in response.json()["project"]["nodes"]}
+    assert nodes["seed"]["output"]["text"] == "一个制片人在直播间看见消失主演的求救弹幕。"
+    assert nodes["premise"]["status"] == "pending"
+    assert nodes["premise"]["output"] is None
+
+
 def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
     db_path = tmp_path / "studio.sqlite3"
 
@@ -274,6 +329,70 @@ def test_run_project_api_starts_observable_background_run(tmp_path, monkeypatch)
     assert body["progress"]["total"] == 5
     assert duplicate_response.status_code == 400
     assert duplicate_response.json()["detail"] == "Project is already running."
+
+
+def test_reset_project_api_turns_failed_project_back_into_editable_draft(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(
+        project_id,
+        "premise",
+        {
+            "one_sentence_pitch": "剪辑师被未来素材拖进救援。",
+            "genre": "悬疑",
+            "target_audience": "18-35 岁短剧用户",
+            "emotional_hook": "错过报警的人必须补上选择。",
+            "story_promise": "每个素材细节都会变成救人的线索。",
+            "risk_flags": [],
+        },
+    )
+    storage.update_canvas_node_status(project_id, "characters", "failed", "模型超时")
+    storage.update_project_status(project_id, "failed", "模型超时")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.post(f"/api/projects/{project_id}/reset")
+        second_response = client.post(f"/api/projects/{project_id}/reset")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    project = response.json()["project"]
+    nodes = {node["key"]: node for node in project["nodes"]}
+    assert project["status"] == "draft"
+    assert project["last_error"] is None
+    assert nodes["premise"]["status"] == "completed"
+    assert nodes["premise"]["output"]["one_sentence_pitch"] == "剪辑师被未来素材拖进救援。"
+    assert nodes["characters"]["status"] == "pending"
+    assert nodes["characters"]["error"] is None
+    assert response.json()["progress"] == {
+        "completed": 1,
+        "total": 5,
+        "active_key": None,
+        "active_title": None,
+        "failed_key": None,
+        "failed_title": None,
+    }
+    assert second_response.status_code == 400
+    assert second_response.json()["detail"] == "Only failed projects can be reset."
 
 
 def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> None:
