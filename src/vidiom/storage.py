@@ -645,6 +645,62 @@ class Storage:
                 (utc_now(), project_id),
             )
 
+    def update_completed_project_script(self, project_id: int, script: dict[str, Any]) -> None:
+        now = utc_now()
+        title = str(script["title"]).strip()
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id, inspiration_id, status
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            if project["status"] != "completed":
+                raise RuntimeError("Only completed projects can have script edits saved.")
+
+            node = conn.execute(
+                """
+                SELECT status, output_json
+                FROM canvas_nodes
+                WHERE project_id = ? AND node_key = 'script'
+                """,
+                (project_id,),
+            ).fetchone()
+            if node is None:
+                raise LookupError(f"Node 'script' was not found in project {project_id}.")
+            if node["status"] != "completed" or not node["output_json"]:
+                raise RuntimeError("Project script is not ready to edit.")
+
+            script_json = _json_or_none(script)
+            conn.execute(
+                """
+                UPDATE canvas_nodes
+                SET output_json = ?, error = NULL, updated_at = ?
+                WHERE project_id = ? AND node_key = 'script'
+                """,
+                (script_json, now, project_id),
+            )
+            conn.execute(
+                """
+                UPDATE projects
+                SET title = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (title, now, project_id),
+            )
+            conn.execute(
+                """
+                UPDATE productions
+                SET title = ?, payload_json = ?
+                WHERE inspiration_id = ?
+                """,
+                (title, script_json, project["inspiration_id"]),
+            )
+
     def update_canvas_node_status(
         self, project_id: int, node_key: str, status: str, error: str | None
     ) -> None:

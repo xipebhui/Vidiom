@@ -5,6 +5,7 @@ const state = {
   progress: null,
   selectedKey: "seed",
   reviewTab: "script",
+  scriptEditing: false,
   running: false,
   pollingProjectId: null,
   pollTimer: null,
@@ -110,6 +111,7 @@ async function loadProject(projectId) {
     state.selectedKey = state.project.nodes.find((node) => node.key === state.selectedKey)
       ? state.selectedKey
       : "seed";
+    state.scriptEditing = false;
     render();
     syncProjectPolling();
   } catch (error) {
@@ -134,6 +136,7 @@ async function createProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
+    state.scriptEditing = false;
     el.seedText.value = "";
     resetProjectFilters();
     await loadProjects();
@@ -182,6 +185,7 @@ async function runProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = activeNodeKey(state.progress) || "premise";
+    state.scriptEditing = false;
     await loadProjects();
     render();
     syncProjectPolling();
@@ -202,6 +206,7 @@ async function pauseProject() {
     state.project = body.project;
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
+    state.scriptEditing = false;
     await loadProjects();
     render();
     syncProjectPolling();
@@ -235,6 +240,40 @@ async function saveDraftEdits(event) {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
+    state.scriptEditing = false;
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function saveScriptEdits(event) {
+  event.preventDefault();
+  if (!state.project || state.project.status !== "completed") return;
+
+  const script = scriptFromEditor(event.currentTarget);
+  if (!script.title.trim()) {
+    showError("标题不能为空。");
+    return;
+  }
+  if (script.logline.trim().length < 10) {
+    showError("Logline 至少需要 10 个字符。");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const body = await api(`/api/projects/${state.project.id}/script`, {
+      method: "PATCH",
+      body: JSON.stringify({ script }),
+    });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    state.scriptEditing = false;
     await loadProjects();
     render();
   } catch (error) {
@@ -281,6 +320,7 @@ async function duplicateProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = "seed";
+    state.scriptEditing = false;
     resetProjectFilters();
     await loadProjects();
     render();
@@ -304,6 +344,7 @@ async function reviseProjectFromNode(startNode) {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = startNode;
+    state.scriptEditing = false;
     resetProjectFilters();
     await loadProjects();
     render();
@@ -324,6 +365,7 @@ async function resetProject() {
     state.activity = body.activity || [];
     state.progress = body.progress || progressFromProject(state.project);
     state.selectedKey = activeNodeKey(state.progress) || "seed";
+    state.scriptEditing = false;
     await loadProjects();
     render();
   } catch (error) {
@@ -520,6 +562,11 @@ function renderReviewTabs(hasScript, hasProduction) {
 }
 
 function renderScriptReview(script) {
+  if (state.scriptEditing && state.project?.status === "completed") {
+    renderScriptEditor(script);
+    return;
+  }
+
   const scenes = script.scenes
     .map(
       (scene) => `
@@ -550,6 +597,7 @@ function renderScriptReview(script) {
     )
     .join("");
   el.scriptPreview.innerHTML = `
+    ${renderScriptEditAction()}
     <div class="kv">
       <div class="kv-row">
         <div class="kv-key">Title</div>
@@ -575,6 +623,98 @@ function renderScriptReview(script) {
       <h3>Scenes & Dialogue</h3>
       ${scenes}
     </div>
+  `;
+  const editButton = el.scriptPreview.querySelector("[data-edit-script]");
+  if (editButton) {
+    editButton.addEventListener("click", () => {
+      state.scriptEditing = true;
+      renderScript();
+    });
+  }
+}
+
+function renderScriptEditAction() {
+  if (state.project?.status !== "completed") return "";
+  return `
+    <div class="review-actions">
+      <button class="secondary-button full-width" type="button" data-edit-script>
+        编辑成片脚本
+      </button>
+    </div>
+  `;
+}
+
+function renderScriptEditor(script) {
+  const outlineFields = script.episode_outline
+    .map(
+      (beat, index) => `
+        <fieldset class="edit-group" data-outline-index="${index}">
+          <legend>Beat ${index + 1}</legend>
+          <label for="outlineBeat${index}">Beat</label>
+          <input id="outlineBeat${index}" name="beat" value="${escapeHtml(beat.beat)}" />
+          <label for="outlinePurpose${index}">Purpose</label>
+          <textarea id="outlinePurpose${index}" name="purpose" rows="2">${escapeHtml(beat.purpose)}</textarea>
+        </fieldset>
+      `,
+    )
+    .join("");
+  const sceneFields = script.scenes
+    .map(
+      (scene, sceneIndex) => `
+        <fieldset class="edit-group" data-scene-index="${sceneIndex}">
+          <legend>Scene ${scene.scene_number}</legend>
+          <label for="sceneSummary${sceneIndex}">Summary</label>
+          <textarea id="sceneSummary${sceneIndex}" name="summary" rows="3">${escapeHtml(scene.summary)}</textarea>
+          <div class="dialogue-edit-list">
+            ${scene.dialogue.map((line, lineIndex) => renderDialogueEditor(line, sceneIndex, lineIndex)).join("")}
+          </div>
+        </fieldset>
+      `,
+    )
+    .join("");
+
+  el.scriptPreview.innerHTML = `
+    <form id="scriptEditor" class="script-editor">
+      <label for="scriptTitle">Title</label>
+      <input id="scriptTitle" name="title" maxlength="120" value="${escapeHtml(script.title)}" />
+      <label for="scriptLogline">Logline</label>
+      <textarea id="scriptLogline" name="logline" rows="3">${escapeHtml(script.logline)}</textarea>
+      <div class="review-section">
+        <h3>Episode Beats</h3>
+        ${outlineFields}
+      </div>
+      <div class="review-section">
+        <h3>Scenes & Dialogue</h3>
+        ${sceneFields}
+      </div>
+      <div class="form-actions">
+        <button class="secondary-button" type="button" data-cancel-script-edit>取消</button>
+        <button class="primary-button" type="submit">保存脚本</button>
+      </div>
+    </form>
+  `;
+  el.scriptPreview.querySelector("#scriptEditor").addEventListener("submit", saveScriptEdits);
+  el.scriptPreview.querySelector("[data-cancel-script-edit]").addEventListener("click", () => {
+    state.scriptEditing = false;
+    renderScript();
+  });
+}
+
+function renderDialogueEditor(line, sceneIndex, lineIndex) {
+  return `
+    <fieldset class="dialogue-edit" data-dialogue-index="${lineIndex}">
+      <legend>${escapeHtml(line.speaker)}</legend>
+      <label for="dialogueLine${sceneIndex}-${lineIndex}">Line</label>
+      <textarea id="dialogueLine${sceneIndex}-${lineIndex}" name="line" rows="2">${escapeHtml(
+        line.line,
+      )}</textarea>
+      <label for="dialogueDirection${sceneIndex}-${lineIndex}">Direction</label>
+      <input
+        id="dialogueDirection${sceneIndex}-${lineIndex}"
+        name="direction"
+        value="${escapeHtml(line.direction)}"
+      />
+    </fieldset>
   `;
 }
 
@@ -751,6 +891,35 @@ function briefFromForm(container) {
   return Object.fromEntries(
     Object.entries(brief).filter(([, value]) => value !== null && value !== ""),
   );
+}
+
+function scriptFromEditor(form) {
+  const currentScript = state.project.nodes.find((node) => node.key === "script").output;
+  const script = JSON.parse(JSON.stringify(currentScript));
+  script.title = form.querySelector("[name='title']").value.trim();
+  script.logline = form.querySelector("[name='logline']").value.trim();
+
+  form.querySelectorAll("[data-outline-index]").forEach((group) => {
+    const index = Number(group.dataset.outlineIndex);
+    script.episode_outline[index].beat = group.querySelector("[name='beat']").value.trim();
+    script.episode_outline[index].purpose = group.querySelector("[name='purpose']").value.trim();
+  });
+
+  form.querySelectorAll("[data-scene-index]").forEach((group) => {
+    const sceneIndex = Number(group.dataset.sceneIndex);
+    script.scenes[sceneIndex].summary = group.querySelector("[name='summary']").value.trim();
+    group.querySelectorAll("[data-dialogue-index]").forEach((dialogueGroup) => {
+      const lineIndex = Number(dialogueGroup.dataset.dialogueIndex);
+      script.scenes[sceneIndex].dialogue[lineIndex].line = dialogueGroup
+        .querySelector("[name='line']")
+        .value.trim();
+      script.scenes[sceneIndex].dialogue[lineIndex].direction = dialogueGroup
+        .querySelector("[name='direction']")
+        .value.trim();
+    });
+  });
+
+  return script;
 }
 
 function renderActivity() {

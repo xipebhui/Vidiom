@@ -43,6 +43,10 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "data-revise-node" in app_js
     assert "function renderCharacterReview" in app_js
     assert "function renderProductionReview" in app_js
+    assert "async function saveScriptEdits" in app_js
+    assert "function renderScriptEditor" in app_js
+    assert "function scriptFromEditor" in app_js
+    assert "/script" in app_js
 
 
 def test_create_project_api(tmp_path) -> None:
@@ -485,6 +489,103 @@ def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> N
     assert body["deliverables"]["script"]["title"] == "倒计时素材"
     assert body["deliverables"]["production_pack"]["shot_plan"][0]["shot"] == "屏幕特写"
     assert body["agent_outputs"]["seed"]["text"] == "一个剪辑师发现素材里藏着未来事故。"
+
+
+def test_update_project_script_api_saves_completed_deliverable_edits(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    original_script = valid_payload()
+    storage.complete_canvas_node(project_id, "script", original_script)
+    storage.complete_canvas_node(project_id, "production", production_output())
+    project = storage.get_project(project_id)
+    storage.complete(project["inspiration_id"], original_script)
+    storage.update_project_title(project_id, "倒计时素材")
+    storage.update_project_status(project_id, "completed")
+
+    edited_script = valid_payload()
+    edited_script["title"] = "倒计时素材：直播版"
+    edited_script["logline"] = "剪辑师发现未来事故素材后，选择直播公开证据救下陌生人。"
+    edited_script["episode_outline"][0]["beat"] = "直播前的异常素材"
+    edited_script["scenes"][0]["dialogue"][0]["line"] = "这不是素材，是明天的求救。"
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}/script",
+            json={"script": edited_script},
+        )
+        export_response = client.get(f"/api/projects/{project_id}/export")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    project = response.json()["project"]
+    nodes = {node["key"]: node for node in project["nodes"]}
+    assert project["title"] == "倒计时素材：直播版"
+    assert nodes["script"]["output"]["logline"] == edited_script["logline"]
+    assert nodes["script"]["output"]["episode_outline"][0]["beat"] == "直播前的异常素材"
+    assert (
+        nodes["script"]["output"]["scenes"][0]["dialogue"][0]["line"]
+        == "这不是素材，是明天的求救。"
+    )
+    assert export_response.json()["deliverables"]["script"]["title"] == "倒计时素材：直播版"
+    productions = override_storage().list_productions(limit=10)
+    assert productions[0].title == "倒计时素材：直播版"
+    assert productions[0].payload["logline"] == edited_script["logline"]
+
+
+def test_update_project_script_api_rejects_non_completed_project(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            openai_model="test-model",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    storage = override_storage()
+    project_id = create_canvas_project(storage, "一个剪辑师发现素材里藏着未来事故。")
+    storage.complete_canvas_node(project_id, "script", valid_payload())
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    try:
+        client = TestClient(app)
+        response = client.patch(
+            f"/api/projects/{project_id}/script",
+            json={"script": valid_payload()},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only completed projects can have script edits saved."
 
 
 def test_export_project_api_rejects_draft_project(tmp_path) -> None:

@@ -458,6 +458,10 @@ textarea:focus {
   margin-bottom: 12px;
 }
 
+.review-actions {
+  margin-bottom: 12px;
+}
+
 .review-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -812,8 +816,53 @@ pre {
   gap: 10px;
 }
 
-.draft-editor label {
+.draft-editor label,
+.script-editor label {
   margin-bottom: 0;
+}
+
+.script-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.edit-group,
+.dialogue-edit {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 10px;
+  margin: 0 0 8px;
+}
+
+.edit-group legend,
+.dialogue-edit legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.edit-group input,
+.edit-group textarea,
+.dialogue-edit input,
+.dialogue-edit textarea {
+  background: var(--surface);
+}
+
+.dialogue-edit-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.form-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .brief-grid {

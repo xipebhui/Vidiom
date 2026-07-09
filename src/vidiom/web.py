@@ -19,6 +19,7 @@ from .canvas import (
     run_canvas_project,
 )
 from .config import Settings
+from .schema import validate_short_drama
 from .storage import Storage
 
 load_dotenv()
@@ -57,6 +58,10 @@ RevisionStartNode = Literal["premise", "characters", "beats", "script", "product
 
 class ReviseProjectRequest(BaseModel):
     start_node: RevisionStartNode
+
+
+class UpdateScriptRequest(BaseModel):
+    script: dict
 
 
 def get_settings() -> Settings:
@@ -218,6 +223,22 @@ def update_project(
             title=request.title,
             brief=_brief_payload(request.brief),
         )
+        return _project_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/projects/{project_id}/script")
+def update_project_script(
+    project_id: int,
+    request: UpdateScriptRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> dict:
+    try:
+        validate_short_drama(request.script)
+        storage.update_completed_project_script(project_id, request.script)
         return _project_response(storage, project_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
