@@ -29,6 +29,21 @@ class Production:
     created_at: str
 
 
+@dataclass(frozen=True)
+class GeneratedImageAsset:
+    id: int
+    project_id: int
+    prompt: str
+    model: str
+    status: str
+    artifact_url: str | None
+    b64_json: str | None
+    revised_prompt: str | None
+    provider_response: dict[str, Any] | None
+    error_message: str | None
+    created_at: str
+
+
 class Storage:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -141,6 +156,24 @@ class Storage:
 
                 CREATE INDEX IF NOT EXISTS idx_project_events_project_id
                     ON project_events(project_id, id);
+
+                CREATE TABLE IF NOT EXISTS generated_image_assets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL,
+                    prompt TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    artifact_url TEXT,
+                    b64_json TEXT,
+                    revised_prompt TEXT,
+                    provider_response_json TEXT,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(project_id) REFERENCES projects(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_generated_image_assets_project_id
+                    ON generated_image_assets(project_id, id);
                 """
             )
             project_columns = {
@@ -449,12 +482,24 @@ class Storage:
                 """,
                 (project_id,),
             ).fetchall()
+            asset_rows = conn.execute(
+                """
+                SELECT
+                    id, project_id, prompt, model, status, artifact_url, b64_json,
+                    revised_prompt, provider_response_json, error_message, created_at
+                FROM generated_image_assets
+                WHERE project_id = ?
+                ORDER BY id DESC
+                """,
+                (project_id,),
+            ).fetchall()
 
         project = _project_row(project_row)
         project["nodes"] = [_node_row(row) for row in node_rows]
         project["edges"] = [
             {"source": row["source_key"], "target": row["target_key"]} for row in edge_rows
         ]
+        project["image_assets"] = [_image_asset_row(row) for row in asset_rows]
         return project
 
     def get_project_activity(self, project_id: int) -> list[dict[str, Any]]:
@@ -534,6 +579,7 @@ class Storage:
                 "script": script,
                 "production_pack": production,
                 "review_notes": project["review_notes"],
+                "image_assets": project["image_assets"],
             },
             "agent_outputs": {
                 key: node["output"]
@@ -1024,6 +1070,111 @@ class Storage:
                 (_json_or_none(output), utc_now(), project_id, node_key),
             )
 
+    def create_generated_image_asset(
+        self,
+        *,
+        project_id: int,
+        prompt: str,
+        model: str,
+        status: str,
+        artifact_url: str | None = None,
+        b64_json: str | None = None,
+        revised_prompt: str | None = None,
+        provider_response: dict[str, Any] | None = None,
+        error_message: str | None = None,
+    ) -> int:
+        clean_prompt = prompt.strip()
+        if not clean_prompt:
+            raise ValueError("Image prompt cannot be empty.")
+        if status not in {"completed", "failed"}:
+            raise ValueError("Image asset status must be completed or failed.")
+        now = utc_now()
+        with self.connect() as conn:
+            project = conn.execute(
+                """
+                SELECT id
+                FROM projects
+                WHERE id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise LookupError(f"Project {project_id} was not found.")
+            cursor = conn.execute(
+                """
+                INSERT INTO generated_image_assets(
+                    project_id, prompt, model, status, artifact_url, b64_json, revised_prompt,
+                    provider_response_json, error_message, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    clean_prompt,
+                    model,
+                    status,
+                    artifact_url,
+                    b64_json,
+                    revised_prompt,
+                    _json_or_none(provider_response),
+                    error_message[:2000] if error_message else None,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE projects
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (now, project_id),
+            )
+            _insert_project_event(
+                conn=conn,
+                project_id=project_id,
+                event_type="image_generation",
+                title="Image generation completed"
+                if status == "completed"
+                else "Image generation failed",
+                status=status,
+                description=clean_prompt[:200]
+                if status == "completed"
+                else (error_message or "Image generation failed.")[:2000],
+                details={"asset_id": int(cursor.lastrowid), "model": model, "prompt": clean_prompt},
+                created_at=now,
+            )
+            return int(cursor.lastrowid)
+
+    def list_generated_image_assets(self, project_id: int) -> list[GeneratedImageAsset]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id, project_id, prompt, model, status, artifact_url, b64_json,
+                    revised_prompt, provider_response_json, error_message, created_at
+                FROM generated_image_assets
+                WHERE project_id = ?
+                ORDER BY id DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        return [
+            GeneratedImageAsset(
+                id=row["id"],
+                project_id=row["project_id"],
+                prompt=row["prompt"],
+                model=row["model"],
+                status=row["status"],
+                artifact_url=row["artifact_url"],
+                b64_json=row["b64_json"],
+                revised_prompt=row["revised_prompt"],
+                provider_response=_json_from_column(row["provider_response_json"]),
+                error_message=row["error_message"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -1092,6 +1243,22 @@ def _node_row(row: sqlite3.Row) -> dict[str, Any]:
         "instructions": _json_from_column(row["instruction_json"]),
         "error": row["error"],
         "updated_at": row["updated_at"],
+    }
+
+
+def _image_asset_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "prompt": row["prompt"],
+        "model": row["model"],
+        "status": row["status"],
+        "artifact_url": row["artifact_url"],
+        "b64_json": row["b64_json"],
+        "revised_prompt": row["revised_prompt"],
+        "provider_response": _json_from_column(row["provider_response_json"]),
+        "error_message": row["error_message"],
+        "created_at": row["created_at"],
     }
 
 

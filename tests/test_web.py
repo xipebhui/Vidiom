@@ -6,8 +6,34 @@ from test_schema import valid_payload
 import vidiom.web as web_module
 from vidiom.canvas import create_canvas_project
 from vidiom.config import Settings
+from vidiom.providers import ImageGenerationResult
 from vidiom.storage import Storage
-from vidiom.web import STATIC_DIR, app, get_settings, get_storage
+from vidiom.web import STATIC_DIR, app, get_image_client, get_settings, get_storage
+
+
+class FakeImageClient:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict] = []
+
+    def generate_image(self, *, model: str, prompt: str) -> ImageGenerationResult:
+        self.calls.append({"model": model, "prompt": prompt})
+        if self.error is not None:
+            raise self.error
+        return ImageGenerationResult(
+            artifact_url="https://provider.test/generated/image-1.png",
+            b64_json=None,
+            revised_prompt="cinematic vertical frame",
+            provider_response={
+                "id": "img_1",
+                "data": [
+                    {
+                        "url": "https://provider.test/generated/image-1.png",
+                        "revised_prompt": "cinematic vertical frame",
+                    }
+                ],
+            },
+        )
 
 
 def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
@@ -29,6 +55,7 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert 'data-review-tab="script"' in index_html
     assert 'data-review-tab="characters"' in index_html
     assert 'data-review-tab="production"' in index_html
+    assert 'data-review-tab="images"' in index_html
     assert 'data-review-tab="quality"' in index_html
     assert 'data-review-tab="delivery"' in index_html
     assert "function briefFromForm" in app_js
@@ -68,6 +95,10 @@ def test_studio_static_review_panel_exposes_workflow_tabs() -> None:
     assert "function renderProductionEditor" in app_js
     assert "function productionFromEditor" in app_js
     assert "data-edit-production" in app_js
+    assert "async function generateProjectImage" in app_js
+    assert "function renderImageReview" in app_js
+    assert "function renderImageAsset" in app_js
+    assert "/images" in app_js
     assert "function renderQualityReview" in app_js
     assert "function qualityReport" in app_js
     assert "function missingItems" in app_js
@@ -103,7 +134,9 @@ def test_create_project_api(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -151,7 +184,9 @@ def test_list_projects_api_filters_by_status_and_query(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -220,7 +255,9 @@ def test_update_draft_project_api_updates_seed_node(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -274,7 +311,9 @@ def test_update_draft_project_api_clears_stale_agent_outputs(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -327,7 +366,9 @@ def test_update_node_instructions_api_persists_agent_guidance(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -379,7 +420,9 @@ def test_get_project_api_returns_activity_timeline(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -433,7 +476,9 @@ def test_run_project_api_starts_observable_background_run(tmp_path, monkeypatch)
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -447,7 +492,7 @@ def test_run_project_api_starts_observable_background_run(tmp_path, monkeypatch)
     def no_background_run(database_path, project_id, model) -> None:
         assert database_path == db_path
         assert project_id == 1
-        assert model == "test-model"
+        assert model == "gpt-5.5"
 
     monkeypatch.setattr(web_module, "_run_project_job", no_background_run)
     project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
@@ -509,7 +554,9 @@ def test_pause_project_api_marks_running_project_and_blocks_early_resume(tmp_pat
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -555,7 +602,9 @@ def test_reset_project_api_turns_failed_project_back_into_editable_draft(tmp_pat
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -621,7 +670,9 @@ def test_export_project_api_returns_completed_deliverable_package(tmp_path) -> N
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -675,7 +726,9 @@ def test_update_project_script_api_saves_completed_deliverable_edits(tmp_path) -
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -748,7 +801,9 @@ def test_update_project_script_api_rejects_non_completed_project(tmp_path) -> No
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -784,7 +839,9 @@ def test_update_project_production_api_saves_completed_deliverable_edits(tmp_pat
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -853,7 +910,9 @@ def test_update_project_production_api_rejects_non_completed_project(tmp_path) -
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -889,7 +948,9 @@ def test_update_project_review_notes_api_saves_completed_release_notes(tmp_path)
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -965,7 +1026,9 @@ def test_update_project_review_notes_api_rejects_non_completed_project(tmp_path)
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -1004,7 +1067,9 @@ def test_export_project_api_rejects_draft_project(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -1036,7 +1101,9 @@ def test_duplicate_project_api_creates_editable_draft_copy(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -1087,7 +1154,9 @@ def test_revise_project_api_creates_partial_rerun_draft(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -1161,7 +1230,9 @@ def test_revise_project_api_rejects_non_completed_project(tmp_path) -> None:
     def override_settings() -> Settings:
         return Settings(
             database_path=db_path,
-            openai_model="test-model",
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
             batch_size=3,
             schedule_minute=0,
             log_level="INFO",
@@ -1184,6 +1255,105 @@ def test_revise_project_api_rejects_non_completed_project(tmp_path) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Only completed projects can be revised."
+
+
+def test_generate_project_image_api_persists_asset(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+    fake_image_client = FakeImageClient()
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    app.dependency_overrides[get_image_client] = lambda: fake_image_client
+    try:
+        client = TestClient(app)
+        response = client.post(
+            f"/api/projects/{project_id}/images",
+            json={"prompt": "竖屏电影感，剪辑室屏幕里出现未来事故画面。"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assets = body["project"]["image_assets"]
+    assert fake_image_client.calls == [
+        {
+            "model": "gpt-image-2",
+            "prompt": "竖屏电影感，剪辑室屏幕里出现未来事故画面。",
+        }
+    ]
+    assert len(assets) == 1
+    assert assets[0]["status"] == "completed"
+    assert assets[0]["model"] == "gpt-image-2"
+    assert assets[0]["artifact_url"] == "https://provider.test/generated/image-1.png"
+    assert assets[0]["provider_response"]["id"] == "img_1"
+    assert body["activity"][-1]["type"] == "image_generation"
+    assert body["activity"][-1]["status"] == "completed"
+
+
+def test_generate_project_image_api_records_visible_failure(tmp_path) -> None:
+    db_path = tmp_path / "studio.sqlite3"
+
+    def override_settings() -> Settings:
+        return Settings(
+            database_path=db_path,
+            model_base_url="https://provider.test/v1",
+            language_model="gpt-5.5",
+            image_model="gpt-image-2",
+            batch_size=3,
+            schedule_minute=0,
+            log_level="INFO",
+        )
+
+    def override_storage() -> Storage:
+        storage = Storage(db_path)
+        storage.migrate()
+        return storage
+
+    project_id = create_canvas_project(override_storage(), "一个剪辑师发现素材里藏着未来事故。")
+
+    app.dependency_overrides[get_settings] = override_settings
+    app.dependency_overrides[get_storage] = override_storage
+    app.dependency_overrides[get_image_client] = lambda: FakeImageClient(
+        error=RuntimeError("HM_IMG_APIKEY is required before generating project images.")
+    )
+    try:
+        client = TestClient(app)
+        response = client.post(
+            f"/api/projects/{project_id}/images",
+            json={"prompt": "未来事故画面"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assets = body["project"]["image_assets"]
+    assert len(assets) == 1
+    assert assets[0]["status"] == "failed"
+    assert assets[0]["error_message"] == (
+        "HM_IMG_APIKEY is required before generating project images."
+    )
+    assert body["activity"][-1]["type"] == "image_generation"
+    assert body["activity"][-1]["status"] == "failed"
 
 
 def premise_output() -> dict:

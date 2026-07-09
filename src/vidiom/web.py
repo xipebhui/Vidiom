@@ -21,6 +21,7 @@ from .canvas import (
     run_canvas_project,
 )
 from .config import Settings
+from .providers import ImageGenerationClient, OpenAICompatibleImageClient
 from .schema import validate_short_drama
 from .storage import Storage
 
@@ -102,6 +103,10 @@ class UpdateReviewNotesRequest(BaseModel):
     action_items: list[ReviewActionRequest] = Field(default_factory=list, max_length=20)
 
 
+class GenerateImageRequest(BaseModel):
+    prompt: str = Field(min_length=2, max_length=2000)
+
+
 def get_settings() -> Settings:
     return Settings.from_env()
 
@@ -110,6 +115,10 @@ def get_storage(settings: Annotated[Settings, Depends(get_settings)]) -> Storage
     storage = Storage(settings.database_path)
     storage.migrate()
     return storage
+
+
+def get_image_client() -> ImageGenerationClient:
+    return OpenAICompatibleImageClient.from_env()
 
 
 @asynccontextmanager
@@ -340,6 +349,45 @@ def update_project_review_notes(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/projects/{project_id}/images")
+def generate_project_image(
+    project_id: int,
+    request: GenerateImageRequest,
+    storage: Annotated[Storage, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    image_client: Annotated[ImageGenerationClient, Depends(get_image_client)],
+) -> dict:
+    prompt = request.prompt.strip()
+    try:
+        storage.get_project(project_id)
+        result = image_client.generate_image(model=settings.image_model, prompt=prompt)
+        storage.create_generated_image_asset(
+            project_id=project_id,
+            prompt=prompt,
+            model=settings.image_model,
+            status="completed",
+            artifact_url=result.artifact_url,
+            b64_json=result.b64_json,
+            revised_prompt=result.revised_prompt,
+            provider_response=result.provider_response,
+        )
+        return _project_response(storage, project_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        try:
+            storage.create_generated_image_asset(
+                project_id=project_id,
+                prompt=prompt,
+                model=settings.image_model,
+                status="failed",
+                error_message=str(exc),
+            )
+            return _project_response(storage, project_id)
+        except LookupError as lookup_exc:
+            raise HTTPException(status_code=404, detail=str(lookup_exc)) from lookup_exc
+
+
 @app.post("/api/projects/{project_id}/run", response_model=RunProjectResponse)
 def run_project(
     project_id: int,
@@ -358,7 +406,7 @@ def run_project(
             _run_project_job,
             settings.database_path,
             project_id,
-            settings.openai_model,
+            settings.language_model,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

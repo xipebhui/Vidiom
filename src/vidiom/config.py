@@ -4,11 +4,16 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+LANGUAGE_MODEL = "gpt-5.5"
+IMAGE_MODEL = "gpt-image-2"
+
 
 @dataclass(frozen=True)
 class Settings:
     database_path: Path
-    openai_model: str
+    model_base_url: str | None
+    language_model: str
+    image_model: str
     batch_size: int
     schedule_minute: int
     log_level: str
@@ -17,17 +22,33 @@ class Settings:
     def from_env(cls) -> Settings:
         return cls(
             database_path=Path(os.getenv("VIDIOM_DATABASE_PATH", "./data/vidiom.sqlite3")),
-            openai_model=os.getenv("VIDIOM_OPENAI_MODEL", "gpt-5.5"),
+            model_base_url=os.getenv("HM_BASE_URL"),
+            language_model=LANGUAGE_MODEL,
+            image_model=IMAGE_MODEL,
             batch_size=_int_env("VIDIOM_BATCH_SIZE", 3),
             schedule_minute=_int_env("VIDIOM_SCHEDULE_MINUTE", 0),
             log_level=os.getenv("VIDIOM_LOG_LEVEL", "INFO"),
         )
 
 
-def require_openai_api_key() -> str:
-    value = os.getenv("OPENAI_API_KEY")
+def require_model_base_url() -> str:
+    value = os.getenv("HM_BASE_URL")
     if not value:
-        raise RuntimeError("OPENAI_API_KEY is required before generating short dramas.")
+        raise RuntimeError("HM_BASE_URL is required before calling the model provider.")
+    return value
+
+
+def require_language_api_key() -> str:
+    value = os.getenv("HM_LLM_APIKEY")
+    if not value:
+        raise RuntimeError("HM_LLM_APIKEY is required before running language agents.")
+    return value
+
+
+def require_image_api_key() -> str:
+    value = os.getenv("HM_IMG_APIKEY")
+    if not value:
+        raise RuntimeError("HM_IMG_APIKEY is required before generating project images.")
     return value
 
 

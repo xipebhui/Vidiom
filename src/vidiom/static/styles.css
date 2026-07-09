@@ -787,6 +787,7 @@ pre {
 .character-grid,
 .engine-grid,
 .shot-list,
+.image-asset-list,
 .dialogue-list {
   display: grid;
   gap: 8px;
@@ -821,6 +822,7 @@ pre {
 .character-card,
 .engine-item,
 .shot-card,
+.image-asset,
 .checklist {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -905,6 +907,90 @@ pre {
 
 .shot-card p {
   grid-column: 1 / -1;
+}
+
+.image-generator {
+  display: grid;
+  gap: 10px;
+}
+
+.image-generator label {
+  margin-bottom: 0;
+}
+
+.image-asset {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.image-asset.status-failed {
+  border-color: rgba(189, 79, 69, 0.42);
+}
+
+.image-asset-media {
+  width: 96px;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.image-asset-media img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.image-reference {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.image-asset-body {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  align-content: start;
+}
+
+.image-asset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.image-asset-head strong,
+.image-asset-body p,
+.image-asset-body small {
+  overflow-wrap: anywhere;
+}
+
+.image-asset-body p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.image-asset-body small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.image-asset-body .error-text {
+  color: var(--coral);
+  font-weight: 750;
 }
 
 .quality-summary,

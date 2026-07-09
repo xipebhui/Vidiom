@@ -1,5 +1,5 @@
 const WORKSPACE_STORAGE_KEY = "vidiom.studio.workspace.v1";
-const REVIEW_TABS = new Set(["script", "characters", "production", "quality", "delivery"]);
+const REVIEW_TABS = new Set(["script", "characters", "production", "images", "quality", "delivery"]);
 const NODE_KEYS = new Set(["seed", "premise", "characters", "beats", "script", "production"]);
 const PROJECT_STATUSES = new Set(["", "draft", "running", "paused", "completed", "failed"]);
 const AGENT_SEQUENCE = [
@@ -21,6 +21,7 @@ const state = {
   scriptEditing: false,
   productionEditing: false,
   reviewNotesEditing: false,
+  imageGenerating: false,
   running: false,
   pollingProjectId: null,
   pollTimer: null,
@@ -397,6 +398,41 @@ async function saveReviewNotes(event) {
     showError(error.message);
   } finally {
     setBusy(false);
+  }
+}
+
+async function generateProjectImage(event) {
+  event.preventDefault();
+  if (!state.project) return;
+
+  const form = event.currentTarget;
+  const prompt = form.querySelector("[name='prompt']").value.trim();
+  if (!prompt) {
+    showError("图像提示词不能为空。");
+    return;
+  }
+
+  state.imageGenerating = true;
+  setBusy(true);
+  renderScript();
+  try {
+    const body = await api(`/api/projects/${state.project.id}/images`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    });
+    state.project = body.project;
+    state.activity = body.activity || [];
+    state.progress = body.progress || progressFromProject(state.project);
+    state.runtime = body.runtime || null;
+    await loadProjects();
+    render();
+  } catch (error) {
+    showError(error.message);
+    await loadProject(state.project.id);
+  } finally {
+    state.imageGenerating = false;
+    setBusy(false);
+    renderScript();
   }
 }
 
@@ -841,8 +877,12 @@ function renderScript() {
   const script = state.project?.nodes.find((node) => node.key === "script")?.output;
   const production = state.project?.nodes.find((node) => node.key === "production")?.output;
   const canExport = state.project ? projectCanExport(state.project) : false;
-  renderReviewTabs(Boolean(script), Boolean(production), canExport);
+  renderReviewTabs(Boolean(script), Boolean(production), canExport, Boolean(state.project));
   if (!script) {
+    if (state.reviewTab === "images" && state.project) {
+      renderImageReview(null, null);
+      return;
+    }
     el.scriptPreview.innerHTML = `<div class="empty">No generated script</div>`;
     return;
   }
@@ -853,6 +893,10 @@ function renderScript() {
   }
   if (state.reviewTab === "production") {
     renderProductionReview(script, production);
+    return;
+  }
+  if (state.reviewTab === "images") {
+    renderImageReview(script, production);
     return;
   }
   if (state.reviewTab === "quality") {
@@ -867,7 +911,7 @@ function renderScript() {
   renderScriptReview(script);
 }
 
-function renderReviewTabs(hasScript, hasProduction, canExport) {
+function renderReviewTabs(hasScript, hasProduction, canExport, hasProject) {
   if (state.reviewTab === "production" && !hasProduction) {
     state.reviewTab = "script";
   }
@@ -878,9 +922,14 @@ function renderReviewTabs(hasScript, hasProduction, canExport) {
     const isActive = tab.dataset.reviewTab === state.reviewTab;
     const needsProduction = tab.dataset.reviewTab === "production";
     const needsExport = tab.dataset.reviewTab === "delivery";
+    const needsProject = tab.dataset.reviewTab === "images";
     tab.classList.toggle("active", isActive);
     tab.setAttribute("aria-selected", String(isActive));
-    tab.disabled = !hasScript || (needsProduction && !hasProduction) || (needsExport && !canExport);
+    tab.disabled =
+      (!hasScript && !needsProject) ||
+      (needsProject && !hasProject) ||
+      (needsProduction && !hasProduction) ||
+      (needsExport && !canExport);
   });
 }
 
@@ -1143,6 +1192,81 @@ function renderProductionEditAction() {
         编辑拍摄包
       </button>
     </div>
+  `;
+}
+
+function renderImageReview(script, production) {
+  if (!state.project) {
+    el.scriptPreview.innerHTML = `<div class="empty">No project selected</div>`;
+    return;
+  }
+
+  const assets = state.project.image_assets || [];
+  const prompt = imagePromptFromProject(script, production, state.project);
+  const assetList = assets.length
+    ? assets.map(renderImageAsset).join("")
+    : `<div class="empty">No generated images</div>`;
+  el.scriptPreview.innerHTML = `
+    <form id="imageGenerator" class="image-generator">
+      <label for="imagePrompt">Image Prompt</label>
+      <textarea id="imagePrompt" name="prompt" rows="6" maxlength="2000">${escapeHtml(prompt)}</textarea>
+      <button class="primary-button full-width" type="submit" ${state.imageGenerating ? "disabled" : ""}>
+        ${state.imageGenerating ? "生成中..." : "生成项目图像"}
+      </button>
+    </form>
+    <div class="review-section">
+      <h3>Generated Image Assets</h3>
+      <div class="image-asset-list">${assetList}</div>
+    </div>
+  `;
+  el.scriptPreview.querySelector("#imageGenerator").addEventListener("submit", generateProjectImage);
+}
+
+function imagePromptFromProject(script, production, project) {
+  const style = production?.visual_style || script?.production_notes?.shooting_style || "";
+  const firstScene =
+    Array.isArray(script?.scenes) && script.scenes.length ? script.scenes[0] : null;
+  const parts = [
+    script?.title || project.title || project.seed_text,
+    script?.logline || project.seed_text,
+    style,
+    firstScene ? `${firstScene.setting} ${firstScene.time}: ${firstScene.summary}` : "",
+    project.brief?.aspect_ratio ? `Frame: ${project.brief.aspect_ratio}` : "",
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
+function renderImageAsset(asset) {
+  const imageSource = asset.artifact_url
+    ? asset.artifact_url
+    : asset.b64_json
+      ? `data:image/png;base64,${asset.b64_json}`
+      : "";
+  const media = imageSource
+    ? `<img src="${escapeHtml(imageSource)}" alt="${escapeHtml(asset.prompt)}" />`
+    : `<div class="image-reference">${escapeHtml(asset.revised_prompt || asset.error_message || "No retrievable image reference")}</div>`;
+  return `
+    <article class="image-asset status-${escapeHtml(asset.status)}">
+      <div class="image-asset-media">${media}</div>
+      <div class="image-asset-body">
+        <div class="image-asset-head">
+          <strong>${escapeHtml(asset.model)}</strong>
+          <span class="status-pill status-${escapeHtml(asset.status)}">${escapeHtml(asset.status)}</span>
+        </div>
+        <p>${escapeHtml(asset.prompt)}</p>
+        ${
+          asset.revised_prompt
+            ? `<small>Revised: ${escapeHtml(asset.revised_prompt)}</small>`
+            : ""
+        }
+        ${
+          asset.error_message
+            ? `<small class="error-text">${escapeHtml(asset.error_message)}</small>`
+            : ""
+        }
+        <small>${escapeHtml(formatTime(asset.created_at))}</small>
+      </div>
+    </article>
   `;
 }
 
@@ -1485,6 +1609,7 @@ function deliveryManifest(project, script, production, report) {
       "project metadata",
       `script: ${beats.length} beats, ${scenes.length} scenes`,
       `production_pack: ${shots.length} shots`,
+      `image_assets: ${(project.image_assets || []).length}`,
       `review_notes: ${review}`,
       `review_tasks: ${reviewTasks}`,
       `agent_outputs: ${agentOutputs} nodes`,

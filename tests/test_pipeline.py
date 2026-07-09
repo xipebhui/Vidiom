@@ -4,7 +4,13 @@ from pathlib import Path
 
 from test_schema import valid_payload
 
-from vidiom.canvas import CanvasAgentStep, create_canvas_project, run_canvas_project
+from vidiom.canvas import (
+    CanvasAgentStep,
+    OpenAICanvasAgent,
+    create_canvas_project,
+    run_canvas_project,
+)
+from vidiom.generator import OpenAIShortDramaGenerator
 from vidiom.pipeline import run_once
 from vidiom.storage import Storage
 
@@ -14,6 +20,32 @@ class FakeGenerator:
         payload = valid_payload()
         payload["logline"] = f"{payload['logline']} 来源：{inspiration_text[:8]}"
         return payload
+
+
+class FakeLanguageJSONClient:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.calls: list[dict] = []
+
+    def generate_json(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_payload: str,
+        schema_name: str,
+        schema: dict,
+    ) -> dict:
+        self.calls.append(
+            {
+                "model": model,
+                "instructions": instructions,
+                "input_payload": input_payload,
+                "schema_name": schema_name,
+                "schema": schema,
+            }
+        )
+        return self.payload
 
 
 def test_run_once_generates_and_stores_production(tmp_path: Path) -> None:
@@ -29,6 +61,57 @@ def test_run_once_generates_and_stores_production(tmp_path: Path) -> None:
     productions = storage.list_productions(limit=10)
     assert len(productions) == 1
     assert productions[0].title == "倒计时素材"
+
+
+def test_openai_short_drama_generator_uses_injected_language_client() -> None:
+    client = FakeLanguageJSONClient(valid_payload())
+    generator = OpenAIShortDramaGenerator("gpt-5.5", client)
+
+    payload = generator.generate("一个剪辑师发现素材里藏着未来事故。")
+
+    assert payload["title"] == "倒计时素材"
+    assert client.calls[0]["model"] == "gpt-5.5"
+    assert client.calls[0]["schema_name"] == "short_drama"
+    assert "一个剪辑师发现素材里藏着未来事故" in client.calls[0]["input_payload"]
+
+
+def test_openai_canvas_agent_includes_guidance_and_schema() -> None:
+    client = FakeLanguageJSONClient(
+        {
+            "one_sentence_pitch": "剪辑师被未来素材拖进救援。",
+            "genre": "悬疑亲情",
+            "target_audience": "18-35 岁短剧用户",
+            "emotional_hook": "错过一次报警的人必须补上选择。",
+            "story_promise": "每个素材细节都会变成救人的线索。",
+            "risk_flags": [],
+        }
+    )
+    agent = OpenAICanvasAgent("gpt-5.5", client)
+    step = CanvasAgentStep(
+        key="premise",
+        title="Premise Agent",
+        kind="agent",
+        x=0,
+        y=0,
+        schema={"type": "object"},
+        instruction="Extract premise.",
+    )
+
+    output = agent.generate_step(
+        step,
+        "一个剪辑师发现素材里藏着未来事故。",
+        {
+            "creative_brief": {"duration_minutes": 5},
+            "current_node_instructions": {"guidance": "前三秒必须出现屏幕异常。"},
+        },
+    )
+
+    assert output["one_sentence_pitch"] == "剪辑师被未来素材拖进救援。"
+    assert client.calls[0]["model"] == "gpt-5.5"
+    assert client.calls[0]["schema_name"] == "premise"
+    assert client.calls[0]["schema"] == {"type": "object"}
+    assert "前三秒必须出现屏幕异常" in client.calls[0]["instructions"]
+    assert '"creative_brief"' in client.calls[0]["input_payload"]
 
 
 def test_project_canvas_persists_nodes_and_edges(tmp_path: Path) -> None:

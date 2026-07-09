@@ -14,7 +14,7 @@ def start_scheduler(settings: Settings) -> None:
     logging.basicConfig(level=settings.log_level)
     storage = Storage(settings.database_path)
     storage.migrate()
-    generator = OpenAIShortDramaGenerator(settings.openai_model)
+    generator = OpenAIShortDramaGenerator(settings.language_model)
 
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
@@ -25,4 +25,3 @@ def start_scheduler(settings: Settings) -> None:
         replace_existing=True,
     )
     scheduler.start()
-

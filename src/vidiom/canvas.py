@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .canvas_schema import BEAT_SCHEMA, CHARACTER_SCHEMA, PREMISE_SCHEMA, PRODUCTION_SCHEMA
-from .config import require_openai_api_key
 from .prompts import SYSTEM_PROMPT
+from .providers import LanguageJSONClient, OpenAICompatibleLanguageClient
 from .schema import SHORT_DRAMA_SCHEMA, validate_short_drama
 from .storage import Storage
 
@@ -100,37 +100,29 @@ class CanvasAgent(Protocol):
 
 
 class OpenAICanvasAgent:
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, client: LanguageJSONClient | None = None) -> None:
         self.model = model
+        self.client = client
 
     def generate_step(self, step: CanvasAgentStep, seed_text: str, context: dict[str, Any]) -> dict:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=require_openai_api_key())
+        client = self.client or OpenAICompatibleLanguageClient.from_env()
         guidance = str((context.get("current_node_instructions") or {}).get("guidance", "")).strip()
         step_instruction = step.instruction
         if guidance:
             step_instruction = (
                 f"{step_instruction}\n\nUser guidance for this node:\n{guidance}"
             )
-        response = client.responses.create(
+        payload = client.generate_json(
             model=self.model,
             instructions=f"{SYSTEM_PROMPT}\n\n{step_instruction}",
-            input=json.dumps(
+            input_payload=json.dumps(
                 {"seed_text": seed_text, "previous_outputs": context},
                 ensure_ascii=False,
                 indent=2,
             ),
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": step.key,
-                    "strict": True,
-                    "schema": step.schema,
-                }
-            },
+            schema_name=step.key,
+            schema=step.schema,
         )
-        payload = json.loads(response.output_text)
         if step.key == "script":
             validate_short_drama(payload)
         return payload

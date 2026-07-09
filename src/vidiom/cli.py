@@ -60,7 +60,7 @@ def run_once_command(
     settings = Settings.from_env()
     storage = Storage(settings.database_path)
     storage.migrate()
-    generator = OpenAIShortDramaGenerator(settings.openai_model)
+    generator = OpenAIShortDramaGenerator(settings.language_model)
     result = run_once(storage, generator, limit or settings.batch_size)
     console.print(
         f"processed={result.processed} succeeded={result.succeeded} failed={result.failed}"
